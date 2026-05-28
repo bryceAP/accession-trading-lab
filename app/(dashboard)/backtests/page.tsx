@@ -6,7 +6,7 @@ export default async function BacktestsPage() {
   const supabase = createClient()
   const { data, error } = await supabase
     .from('backtests')
-    .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics')
+    .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve')
     .order('completed_at', { ascending: false })
 
   const rows = (data ?? []) as BacktestRow[]

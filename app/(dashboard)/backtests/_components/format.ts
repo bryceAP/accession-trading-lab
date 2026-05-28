@@ -80,12 +80,31 @@ export function pnlClass(n: number | null | undefined): string {
   return 'text-muted-foreground'
 }
 
+// Candidate keys per logical metric. Nautilus PortfolioAnalyzer keys
+// (literal strings with spaces, parens, and casing) listed alongside
+// snake_case fallbacks so older or alternate writers still resolve.
 const METRIC_KEYS = {
-  total_pnl: ['total_pnl', 'net_pnl', 'pnl', 'profit'],
-  win_rate: ['win_rate', 'winrate', 'win_pct'],
-  sharpe: ['sharpe', 'sharpe_ratio'],
-  max_drawdown: ['max_drawdown', 'max_dd', 'mdd'],
-  total_trades: ['total_trades', 'num_trades', 'trade_count', 'trades'],
+  total_pnl: [
+    'PnL (total)',
+    'total_pnl', 'net_pnl', 'pnl', 'profit',
+  ],
+  win_rate: [
+    'Win Rate',
+    'win_rate', 'winrate', 'win_pct',
+  ],
+  sharpe: [
+    'Sharpe Ratio (252 days)',
+    'Sharpe Ratio',
+    'sharpe', 'sharpe_ratio',
+  ],
+  max_drawdown: [
+    'max_drawdown', 'max_dd', 'mdd',
+  ],
+  total_trades: [
+    'Total Positions',
+    'Total Orders',
+    'total_trades', 'num_trades', 'trade_count', 'trades',
+  ],
 } as const
 
 export function pickMetric(
@@ -94,10 +113,33 @@ export function pickMetric(
 ): number | null {
   if (!metrics) return null
   for (const k of METRIC_KEYS[kind]) {
-    const v = metrics[k]
-    if (typeof v === 'number' && !Number.isNaN(v)) return v
+    if (!(k in metrics)) continue
+    const n = asNumber(metrics[k])
+    if (n != null) return n
   }
   return null
+}
+
+// Walk an equity_curve jsonb and return the worst peak-to-trough drop
+// as a positive USD magnitude. Returns null when the curve has no
+// usable equity values. Same algorithm as the detail page's drawdown
+// chart (running peak minus current equity, take the max).
+export function maxDrawdownFromCurve(raw: unknown): number | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  let peak = -Infinity
+  let maxDd = 0
+  let seen = 0
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue
+    const obj = p as Record<string, unknown>
+    const equity = asNumber(obj.equity ?? obj.value ?? obj.v ?? obj.balance)
+    if (equity == null) continue
+    seen++
+    if (equity > peak) peak = equity
+    const dd = peak - equity
+    if (dd > maxDd) maxDd = dd
+  }
+  return seen > 0 ? maxDd : null
 }
 
 const METRIC_LABELS: Record<string, string> = {

@@ -10,6 +10,7 @@ import {
   fmtNumber,
   fmtPct,
   fmtUsd,
+  maxDrawdownFromCurve,
   pickMetric,
   pnlClass,
   relativeTime,
@@ -24,6 +25,7 @@ export type BacktestRow = {
   end_date: string | null
   completed_at: string | null
   metrics: Record<string, unknown> | null
+  equity_curve: unknown
 }
 
 type SortKey =
@@ -55,7 +57,9 @@ function derive(row: BacktestRow): Derived {
     total_pnl: pickMetric(row.metrics, 'total_pnl'),
     win_rate: pickMetric(row.metrics, 'win_rate'),
     sharpe: pickMetric(row.metrics, 'sharpe'),
-    max_drawdown: pickMetric(row.metrics, 'max_drawdown'),
+    // Max DD is not in metrics — compute from equity_curve. Stored as
+    // a positive magnitude ($); rendered with a leading minus.
+    max_drawdown: maxDrawdownFromCurve(row.equity_curve),
     total_trades: pickMetric(row.metrics, 'total_trades'),
   }
 }
@@ -229,8 +233,8 @@ function BodyRow({ d }: { d: Derived }) {
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPct(d.win_rate)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{d.sharpe == null ? '—' : fmtNumber(d.sharpe, 2)}</td>
-      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', d.max_drawdown != null && d.max_drawdown !== 0 && 'text-[var(--negative)]')}>
-        {fmtPct(d.max_drawdown)}
+      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', d.max_drawdown != null && d.max_drawdown > 0 && 'text-[var(--negative)]')}>
+        {d.max_drawdown == null ? '—' : d.max_drawdown === 0 ? fmtUsd(0) : `−${fmtUsd(d.max_drawdown)}`}
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtInt(d.total_trades)}</td>
       <td
