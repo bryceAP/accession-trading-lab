@@ -1,33 +1,50 @@
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { ActivityLog, type ActivityEvent } from './_components/activity-log'
+
+const PAGE_SIZE = 50
 
 export default async function ActivityPage() {
   const supabase = createClient()
-  const { count, error } = await supabase
-    .from('events')
-    .select('*', { count: 'exact', head: true })
+
+  // Initial page of events + the full set of distinct event_types / sources for
+  // the filter chips (so rare types still appear even if absent from page 1).
+  const [eventsRes, typesRes, sourcesRes] = await Promise.all([
+    supabase
+      .from('events')
+      .select('id, ts, event_type, source, data')
+      .order('ts', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(PAGE_SIZE),
+    supabase.from('events').select('event_type'),
+    supabase.from('events').select('source'),
+  ])
+
+  const errs = [eventsRes.error, typesRes.error, sourcesRes.error].filter(Boolean)
+  if (errs.length) console.error('[Activity]', errs)
+
+  const initialEvents = (eventsRes.data ?? []) as ActivityEvent[]
+  const knownEventTypes = Array.from(
+    new Set(((typesRes.data ?? []) as { event_type: string }[]).map((r) => r.event_type)),
+  )
+  const knownSources = Array.from(
+    new Set(((sourcesRes.data ?? []) as { source: string }[]).map((r) => r.source)),
+  )
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-4 max-w-[1400px]">
       <div className="flex items-center justify-between">
         <h1 className="text-sm font-semibold tracking-tight">Activity</h1>
-        {error ? (
+        {eventsRes.error ? (
           <Badge variant="destructive" className="text-xs">DB error</Badge>
-        ) : (
-          <Badge variant="outline" className="text-xs border-positive/40 text-positive">
-            Connected
-          </Badge>
-        )}
+        ) : null}
       </div>
 
-      <div className="rounded border border-border bg-card p-4">
-        <div className="text-xs text-muted-foreground mb-1">Total events</div>
-        <div className="text-2xl font-mono font-semibold tabular-nums">{count ?? 0}</div>
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        Real-time activity log coming soon. Row count confirms Supabase connectivity.
-      </p>
+      <ActivityLog
+        initialEvents={initialEvents}
+        knownEventTypes={knownEventTypes}
+        knownSources={knownSources}
+      />
     </div>
   )
 }
