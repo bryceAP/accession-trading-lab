@@ -137,21 +137,52 @@ export function metricLabel(key: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+export type MetricKind = 'pct' | 'usd' | 'ratio' | 'int' | 'num'
+
+export function metricKind(key: string): MetricKind {
+  const k = key.toLowerCase()
+  // Order matters: 'ratio' must beat 'rate' (substring), and explicit '%' wins
+  // over 'pnl' for keys like "PnL% (total)".
+  if (k.includes('ratio') || k.includes('factor')) return 'ratio'
+  if (k.includes('orders') || k.includes('positions')) return 'int'
+  if (k.includes('rate') || k.includes('return') || k.includes('%')) return 'pct'
+  if (k.includes('pnl') || k.includes('winner') || k.includes('loser') || k.includes('expectancy')) return 'usd'
+  return 'num'
+}
+
+export function asNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isNaN(v) ? null : v
+  if (typeof v === 'string') {
+    const trimmed = v.trim()
+    if (!trimmed) return null
+    const n = Number(trimmed)
+    return Number.isNaN(n) ? null : n
+  }
+  return null
+}
+
 export function formatMetricValue(key: string, v: unknown): string {
   if (v == null) return '—'
-  if (typeof v === 'string') return v
   if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v !== 'number' || Number.isNaN(v)) return String(v)
 
-  const k = key.toLowerCase()
-  if (k.includes('pnl') || k.includes('profit') || k === 'avg_trade' || k === 'avg_win' || k === 'avg_loss' || k === 'expectancy') {
-    return fmtUsd(v, { signed: true })
+  const n = asNumber(v)
+  if (n == null) return typeof v === 'string' ? v : String(v)
+
+  switch (metricKind(key)) {
+    case 'pct': {
+      // Rates/returns from Nautilus arrive as proportions (0–1); scale them.
+      // Use 2 decimals for sub-1% values so 0.09% doesn't collapse to 0.1%.
+      const pct = Math.abs(n) <= 1 ? n * 100 : n
+      const digits = Math.abs(pct) < 1 && pct !== 0 ? 2 : 1
+      return `${pct.toFixed(digits)}%`
+    }
+    case 'usd':
+      return fmtUsd(n)
+    case 'ratio':
+      return fmtNumber(n, 2)
+    case 'int':
+      return fmtInt(n)
+    case 'num':
+      return fmtNumber(n, 2)
   }
-  if (k.includes('rate') || k.includes('pct') || k.includes('drawdown') || k === 'cagr' || k === 'volatility' || k === 'exposure') {
-    return fmtPct(v)
-  }
-  if (k.includes('trades') || k.includes('count')) {
-    return fmtInt(v)
-  }
-  return fmtNumber(v, 2)
 }

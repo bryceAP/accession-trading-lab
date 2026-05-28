@@ -6,11 +6,13 @@ import { EquityChart, type EquityPoint, type TradeMarker } from '../_components/
 import { DrawdownChart } from '../_components/drawdown-chart'
 import { NotesThread, type Note } from '../_components/notes-thread'
 import {
+  asNumber,
   fmtDate,
   fmtDateTime,
   fmtDuration,
   fmtUsd,
   formatMetricValue,
+  metricKind,
   metricLabel,
   pnlClass,
   relativeTime,
@@ -191,17 +193,22 @@ export default async function BacktestDetailPage({
           <div className="text-xs text-muted-foreground">No metrics recorded.</div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
-            {Object.entries(metrics).map(([k, v]) => (
-              <div key={k} className="space-y-0.5">
-                <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{metricLabel(k)}</div>
-                <div className={cn(
-                  'font-mono tabular-nums text-sm',
-                  typeof v === 'number' && (k.toLowerCase().includes('pnl') || k.toLowerCase().includes('profit')) && pnlClass(v),
-                )}>
-                  {formatMetricValue(k, v)}
+            {Object.entries(metrics).map(([k, v]) => {
+              const kind = metricKind(k)
+              const n = asNumber(v)
+              const colored = kind === 'usd' && n != null
+              return (
+                <div key={k} className="space-y-0.5">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{metricLabel(k)}</div>
+                  <div className={cn(
+                    'font-mono tabular-nums text-sm',
+                    colored && pnlClass(n),
+                  )}>
+                    {formatMetricValue(k, v)}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </section>
