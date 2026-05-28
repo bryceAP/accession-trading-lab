@@ -1,36 +1,82 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Accession Trading Lab
 
-## Getting Started
+Read-mostly dashboard for a futures algorithmic trading system. A separate
+Python system writes to a Supabase database; this Next.js app reads from the
+same DB. The dashboard only writes notes and strategy status labels — it never
+controls or triggers the trading system.
 
-First, run the development server:
+**Stack:** Next.js 14 (App Router), TypeScript, Tailwind v4, shadcn/ui,
+`@supabase/ssr` (magic-link email auth), recharts, lucide-react, Shiki (SSR
+syntax highlighting).
+
+**Pages:** `/` overview, `/strategies` + `/strategies/[id]`, `/backtests` +
+`/backtests/[id]`, `/activity` (realtime log).
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone https://github.com/bryceAP/accession-trading-lab.git
+cd accession-trading-lab
+npm install
+cp .env.local.example .env.local   # fill in real values
+npm run dev                        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Required env vars
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+All three are required for both local dev and production:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Name                            | Where it's used                          | Where to get it                                            |
+| ------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase server + browser clients        | Supabase → Project Settings → API → **Project URL**        |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase server + browser clients        | Supabase → Project Settings → API → **anon (public) key**  |
+| `ALLOWED_EMAILS`                | `middleware.ts` allow-list (csv)         | Whoever should be able to sign in (e.g. `a@x.com,b@y.com`) |
 
-## Learn More
+The two `NEXT_PUBLIC_*` vars are intentionally public (they ship to the
+browser). The Supabase **service role key is never used** by this app — writes
+are gated by RLS policies, not by service-role bypass.
 
-To learn more about Next.js, take a look at the following resources:
+## Database
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Tables (managed by the Python writer, not this app): `strategies`, `backtests`,
+`trades`, `events`, `paper_status`, `notes`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+**RLS expectations** for the anon-key + magic-link session:
 
-## Deploy on Vercel
+- `SELECT` allowed for `authenticated` on all tables read by the dashboard.
+- `INSERT` on `notes` and `UPDATE`/`DELETE` on `strategies` allowed for
+  `authenticated` (these are the only writes the dashboard performs).
+- For `/activity` realtime, add the `events` table to the `supabase_realtime`
+  publication.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Auth
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Magic-link email via Supabase. Sign-in happens at `/login`; the callback at
+`/auth/callback` exchanges the code for a session. `middleware.ts` then enforces
+two checks on every request:
+
+1. The session cookie must be valid.
+2. The signed-in email must appear in `ALLOWED_EMAILS`.
+
+If either fails, the user is signed out and redirected to `/login`.
+
+## Scripts
+
+```bash
+npm run dev      # next dev
+npm run build    # next build (production bundle)
+npm run start    # next start (serve production build)
+npm run lint     # next lint
+```
+
+## Deploy to Vercel
+
+See the deployment notes in the project chat / handoff doc — short version:
+
+1. Push to GitHub (this repo: `bryceAP/accession-trading-lab`).
+2. Import the repo at <https://vercel.com/new>.
+3. Set all three env vars under **Project Settings → Environment Variables**
+   (Production + Preview + Development scopes).
+4. Add the Vercel production domain to Supabase **Authentication → URL
+   Configuration → Site URL** and **Redirect URLs** so magic links work.
+5. Deploy.
