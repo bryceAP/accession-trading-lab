@@ -39,6 +39,9 @@ type Trade = {
   exit_price: number | null
   quantity: number | null
   pnl: number | null
+  commission: number | null
+  slippage: number | null
+  source: string | null
 }
 
 function normalizeEquityCurve(raw: unknown): EquityPoint[] {
@@ -84,7 +87,7 @@ export default async function BacktestDetailPage({
       .maybeSingle(),
     supabase
       .from('trades')
-      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl')
+      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, source')
       .eq('backtest_id', params.id)
       .order('entry_ts', { ascending: true }),
     supabase
@@ -122,6 +125,23 @@ export default async function BacktestDetailPage({
   const tradeMarkers = tradesToMarkers(trades)
   const completed = backtest.completed_at ? new Date(backtest.completed_at) : null
   const metrics = backtest.metrics ?? {}
+
+  // Trading-cost summary. Treat each trade's pnl as gross (price-action) PnL
+  // and commission/slippage as additive costs. Net = gross − commission −
+  // slippage. Skip rows where the field is null so older trades (recorded
+  // before the columns existed) don't poison the totals.
+  const hasAnyCommission = trades.some((t) => t.commission != null)
+  const hasAnySlippage = trades.some((t) => t.slippage != null)
+  const totalCommission = trades.reduce((acc, t) => acc + (t.commission ?? 0), 0)
+  const totalSlippage = trades.reduce((acc, t) => acc + (t.slippage ?? 0), 0)
+  const grossPnl = trades.reduce((acc, t) => acc + (t.pnl ?? 0), 0)
+  const netPnl = grossPnl - totalCommission - totalSlippage
+
+  // Source label: trades for a backtest run all share the same source. If
+  // no trades are recorded yet, the page is a /backtests/* route so the
+  // safe default is "estimated".
+  const runSource = trades[0]?.source ?? 'backtest'
+  const costsKind: 'estimated' | 'actual' = runSource === 'backtest' ? 'estimated' : 'actual'
 
   return (
     <div className="p-6 space-y-5 max-w-[1400px]">
@@ -216,6 +236,57 @@ export default async function BacktestDetailPage({
         )}
       </section>
 
+      {/* ── Trading costs ─────────────────────────────────────── */}
+      {trades.length > 0 && (
+        <section className="rounded border border-border bg-card p-4 space-y-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Trading costs
+            </h2>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wider uppercase',
+                costsKind === 'actual'
+                  ? 'border-[var(--positive)]/30 text-[var(--positive)] bg-[var(--positive)]/10'
+                  : 'border-[var(--warning)]/30 text-[var(--warning)] bg-[var(--warning)]/10',
+              )}
+              title={`source: ${runSource}`}
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  costsKind === 'actual' ? 'bg-[var(--positive)]' : 'bg-[var(--warning)]',
+                )}
+              />
+              {costsKind}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <CostStat
+              label="Total commission"
+              value={hasAnyCommission ? fmtUsd(totalCommission) : '—'}
+              cls="text-[var(--negative)]"
+            />
+            <CostStat
+              label="Total slippage"
+              value={hasAnySlippage ? fmtUsd(totalSlippage) : '—'}
+              cls="text-[var(--negative)]"
+            />
+            <CostStat
+              label="Gross P&L"
+              value={fmtUsd(grossPnl, { signed: true })}
+              cls={pnlClass(grossPnl)}
+            />
+            <CostStat
+              label="Net P&L"
+              value={fmtUsd(netPnl, { signed: true })}
+              cls={pnlClass(netPnl)}
+              emphasis
+            />
+          </div>
+        </section>
+      )}
+
       {/* ── Price chart placeholder ───────────────────────────── */}
       <section className="rounded border border-border border-dashed bg-card/50 p-6 text-center">
         <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
@@ -271,6 +342,8 @@ function TradesTable({ trades }: { trades: Trade[] }) {
             <th className="px-3 py-2 text-right font-semibold">Exit px</th>
             <th className="px-3 py-2 text-right font-semibold">Qty</th>
             <th className="px-3 py-2 text-right font-semibold">P&L</th>
+            <th className="px-3 py-2 text-right font-semibold">Commission</th>
+            <th className="px-3 py-2 text-right font-semibold">Slippage</th>
             <th className="px-3 py-2 text-right font-semibold">Duration</th>
           </tr>
         </thead>
@@ -304,6 +377,12 @@ function TradesTable({ trades }: { trades: Trade[] }) {
                 <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', pnlClass(t.pnl))}>
                   {t.pnl == null ? '—' : fmtUsd(t.pnl, { signed: true })}
                 </td>
+                <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', t.commission != null && 'text-[var(--negative)]')}>
+                  {t.commission == null ? '—' : fmtUsd(t.commission)}
+                </td>
+                <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', t.slippage != null && 'text-[var(--negative)]')}>
+                  {t.slippage == null ? '—' : fmtUsd(t.slippage)}
+                </td>
                 <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
                   {fmtDuration(duration)}
                 </td>
@@ -312,6 +391,32 @@ function TradesTable({ trades }: { trades: Trade[] }) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+function CostStat({
+  label,
+  value,
+  cls,
+  emphasis,
+}: {
+  label: string
+  value: string
+  cls?: string
+  emphasis?: boolean
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded border bg-card px-3 py-2.5 space-y-1',
+        emphasis ? 'border-foreground/20' : 'border-border',
+      )}
+    >
+      <div className="text-[10px] text-muted-foreground uppercase tracking-widest">{label}</div>
+      <div className={cn('font-mono tabular-nums', emphasis ? 'text-base font-semibold' : 'text-sm', cls)}>
+        {value}
+      </div>
     </div>
   )
 }
