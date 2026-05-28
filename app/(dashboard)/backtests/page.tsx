@@ -1,33 +1,30 @@
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { BacktestsTable, type BacktestRow } from './_components/backtests-table'
 
 export default async function BacktestsPage() {
   const supabase = createClient()
-  const { count, error } = await supabase
+  const { data, error } = await supabase
     .from('backtests')
-    .select('*', { count: 'exact', head: true })
+    .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics')
+    .order('completed_at', { ascending: false })
+
+  const rows = (data ?? []) as BacktestRow[]
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-4 max-w-[1400px]">
       <div className="flex items-center justify-between">
         <h1 className="text-sm font-semibold tracking-tight">Backtests</h1>
         {error ? (
           <Badge variant="destructive" className="text-xs">DB error</Badge>
         ) : (
-          <Badge variant="outline" className="text-xs border-positive/40 text-positive">
-            Connected
-          </Badge>
+          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+            {rows.length} total
+          </span>
         )}
       </div>
 
-      <div className="rounded border border-border bg-card p-4">
-        <div className="text-xs text-muted-foreground mb-1">Total backtests</div>
-        <div className="text-2xl font-mono font-semibold tabular-nums">{count ?? 0}</div>
-      </div>
-
-      <p className="text-xs text-muted-foreground">
-        Backtest archive coming soon. Row count confirms Supabase connectivity.
-      </p>
+      <BacktestsTable rows={rows} />
     </div>
   )
 }
