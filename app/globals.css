@@ -1,8 +1,12 @@
+@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+
+/* Class-based dark mode — <html> always has class="dark" */
+@custom-variant dark (&:is(.dark *));
+
+/* Pull in JS config for theme extensions (colors, fontFamily) */
+@config "../tailwind.config.ts";
 
 @layer utilities {
   .text-balance {
@@ -14,13 +18,7 @@
 }
 
 @layer base {
-  .theme {
-    --font-heading: var(--font-sans);
-    --font-sans: var(--font-sans);
-  }
-
   :root {
-    /* Force dark — this app is always dark */
     color-scheme: dark;
 
     --background: oklch(0.09 0 0);
@@ -50,7 +48,6 @@
     --input: oklch(0.20 0 0);
     --ring: oklch(0.45 0 0);
 
-    /* Charts */
     --chart-1: oklch(0.65 0.15 230);
     --chart-2: oklch(0.65 0.17 145);
     --chart-3: oklch(0.75 0.15 80);
@@ -59,7 +56,6 @@
 
     --radius: 0.375rem;
 
-    /* Sidebar */
     --sidebar: oklch(0.10 0 0);
     --sidebar-foreground: oklch(0.93 0 0);
     --sidebar-primary: oklch(0.93 0 0);
@@ -69,19 +65,13 @@
     --sidebar-border: oklch(0.20 0 0);
     --sidebar-ring: oklch(0.45 0 0);
 
-    /* Trading-specific */
     --positive: oklch(0.65 0.17 145);
     --negative: oklch(0.62 0.21 25);
     --warning: oklch(0.75 0.15 80);
   }
 
-  /* Dark class is a no-op — the app always uses the root vars above */
-  .dark {
-    color-scheme: dark;
-  }
-
   * {
-    @apply border-border;
+    border-color: var(--border);
   }
 
   body {
@@ -89,6 +79,6 @@
   }
 
   html {
-    @apply font-sans;
+    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   }
 }
