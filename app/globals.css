@@ -8,15 +8,6 @@
 /* Pull in JS config for theme extensions (colors, fontFamily) */
 @config "../tailwind.config.ts";
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-  .tabular {
-    font-variant-numeric: tabular-nums;
-  }
-}
-
 @layer base {
   :root {
     color-scheme: dark;
