@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   BookOpen,
   FlaskConical,
+  Radio,
   Activity,
   TrendingUp,
   LogOut,
@@ -17,6 +18,7 @@ const navItems = [
   { href: '/',            label: 'Overview',   icon: LayoutDashboard },
   { href: '/strategies',  label: 'Strategies', icon: BookOpen        },
   { href: '/backtests',   label: 'Backtests',  icon: FlaskConical    },
+  { href: '/live',        label: 'Live',       icon: Radio           },
   { href: '/activity',    label: 'Activity',   icon: Activity        },
 ]
 
