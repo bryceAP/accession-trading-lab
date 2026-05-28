@@ -93,10 +93,16 @@ export function LiveView({
   initialStatus,
   initialTrades,
   initialEvents,
+  statusError,
+  tradesError,
+  eventsError,
 }: {
   initialStatus: LivePaperStatus | null
   initialTrades: LiveTrade[]
   initialEvents: LiveEvent[]
+  statusError: string | null
+  tradesError: string | null
+  eventsError: string | null
 }) {
   const supabase = useMemo(() => createClient(), [])
 
@@ -137,16 +143,16 @@ export function LiveView({
     return () => { supabase.removeChannel(ch) }
   }, [supabase])
 
-  // ── Realtime: trades (INSERT only, filter source client-side) ─
+  // ── Realtime: trades (INSERT + UPDATE, filter source=paper at Postgres) ─
   useEffect(() => {
     const ch = supabase
       .channel('public:trades:live')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'trades' },
+        { event: 'INSERT', schema: 'public', table: 'trades', filter: 'source=eq.paper' },
         (payload) => {
           const t = payload.new as LiveTrade
-          if (!t || (t.source !== 'paper' && t.source !== 'live')) return
+          if (!t || t.source !== 'paper') return
           setTrades((prev) => {
             if (prev.some((x) => x.id === t.id)) return prev
             return [t, ...prev]
@@ -168,10 +174,10 @@ export function LiveView({
       )
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'trades' },
+        { event: 'UPDATE', schema: 'public', table: 'trades', filter: 'source=eq.paper' },
         (payload) => {
           const t = payload.new as LiveTrade
-          if (!t || (t.source !== 'paper' && t.source !== 'live')) return
+          if (!t || t.source !== 'paper') return
           setTrades((prev) => prev.map((x) => (x.id === t.id ? t : x)))
         },
       )
@@ -240,12 +246,25 @@ export function LiveView({
         inactive={inactive}
       />
 
+      {statusError && (
+        <ErrorBanner label="paper_status" message={statusError} />
+      )}
+
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <TradesPanel trades={trades} newIds={newTradeIds} />
-          <EventsPanel events={events} newIds={newEventIds} />
+          <TradesPanel trades={trades} newIds={newTradeIds} error={tradesError} />
+          <EventsPanel events={events} newIds={newEventIds} error={eventsError} />
         </div>
       )}
+    </div>
+  )
+}
+
+function ErrorBanner({ label, message }: { label: string; message: string }) {
+  return (
+    <div className="rounded border border-[var(--negative)]/40 bg-[var(--negative)]/10 px-3 py-2 text-xs text-[var(--negative)] font-mono">
+      <span className="font-semibold uppercase tracking-widest mr-2">[{label}]</span>
+      {message}
     </div>
   )
 }
@@ -349,7 +368,9 @@ function StatusPanel({
           sub={
             hasPosition && status?.position_avg_price != null
               ? `entry ${Number(status.position_avg_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : undefined
+              : hasPosition
+                ? undefined
+                : 'no position'
           }
         />
         <StatCard
@@ -400,36 +421,60 @@ function StatCard({
 function TradesPanel({
   trades,
   newIds,
+  error,
 }: {
   trades: LiveTrade[]
   newIds: Set<string | number>
+  error: string | null
 }) {
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
         <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Today&rsquo;s paper trades
+          Paper trades · last 24h
         </h2>
-        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-          {trades.length}
-        </span>
+        <div className="flex items-center gap-2">
+          {/* Paper trades use simulated fills, so costs are "estimated".
+              Mirrors the badge on /backtests/[id]. */}
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/30 text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-widest"
+            title="Costs are simulated for paper trading"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
+            estimated
+          </span>
+          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+            {trades.length}
+          </span>
+        </div>
       </div>
-      {trades.length === 0 ? (
-        <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-          No paper trades today.
+
+      {error ? (
+        <div className="px-4 py-6 text-center text-xs text-[var(--negative)] font-mono">
+          Query error: {error}
+        </div>
+      ) : trades.length === 0 ? (
+        <div className="px-4 py-6 text-center text-xs text-muted-foreground space-y-1">
+          <div>No paper trades in the last 24h.</div>
+          <div className="text-[10px] text-muted-foreground/70">
+            Filter: <span className="font-mono">trades.source = &apos;paper&apos;</span>
+          </div>
         </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/30 text-[10px] uppercase tracking-widest text-muted-foreground">
-                <th className="px-3 py-2 text-left font-semibold">Entry</th>
-                <th className="px-3 py-2 text-left font-semibold">Exit</th>
-                <th className="px-3 py-2 text-left font-semibold">Side</th>
+                <th className="px-3 py-2 text-left  font-semibold">Entry</th>
+                <th className="px-3 py-2 text-left  font-semibold">Exit</th>
+                <th className="px-3 py-2 text-left  font-semibold">Side</th>
                 <th className="px-3 py-2 text-right font-semibold">Qty</th>
                 <th className="px-3 py-2 text-right font-semibold">Entry px</th>
                 <th className="px-3 py-2 text-right font-semibold">Exit px</th>
-                <th className="px-3 py-2 text-right font-semibold">P&L</th>
+                <th className="px-3 py-2 text-right font-semibold">Gross P&L</th>
+                <th className="px-3 py-2 text-right font-semibold">Commission</th>
+                <th className="px-3 py-2 text-right font-semibold">Slippage</th>
+                <th className="px-3 py-2 text-right font-semibold">Net</th>
               </tr>
             </thead>
             <tbody>
@@ -438,6 +483,10 @@ function TradesPanel({
                   (t.side ?? '').toLowerCase().startsWith('s') ? 'text-[var(--negative)]' : 'text-[var(--positive)]'
                 const isNew = newIds.has(t.id)
                 const isOpen = t.exit_ts == null
+                const net =
+                  t.pnl == null
+                    ? null
+                    : t.pnl - (t.commission ?? 0) - (t.slippage ?? 0)
                 return (
                   <tr
                     key={t.id}
@@ -469,6 +518,15 @@ function TradesPanel({
                     <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', pnlClass(t.pnl))}>
                       {t.pnl == null ? '—' : fmtUsd(t.pnl, { signed: true })}
                     </td>
+                    <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', t.commission != null && 'text-[var(--negative)]')}>
+                      {t.commission == null ? '—' : fmtUsd(t.commission)}
+                    </td>
+                    <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', t.slippage != null && 'text-[var(--negative)]')}>
+                      {t.slippage == null ? '—' : fmtUsd(t.slippage)}
+                    </td>
+                    <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums font-semibold', pnlClass(net))}>
+                      {net == null ? '—' : fmtUsd(net, { signed: true })}
+                    </td>
                   </tr>
                 )
               })}
@@ -485,9 +543,11 @@ function TradesPanel({
 function EventsPanel({
   events,
   newIds,
+  error,
 }: {
   events: LiveEvent[]
   newIds: Set<number>
+  error: string | null
 }) {
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
@@ -499,9 +559,16 @@ function EventsPanel({
           {events.length}
         </span>
       </div>
-      {events.length === 0 ? (
-        <div className="px-4 py-6 text-center text-xs text-muted-foreground">
-          No paper or live events yet.
+      {error ? (
+        <div className="px-4 py-6 text-center text-xs text-[var(--negative)] font-mono">
+          Query error: {error}
+        </div>
+      ) : events.length === 0 ? (
+        <div className="px-4 py-6 text-center text-xs text-muted-foreground space-y-1">
+          <div>No paper or live events yet.</div>
+          <div className="text-[10px] text-muted-foreground/70">
+            Filter: <span className="font-mono">events.source ∈ (&apos;paper&apos;,&apos;live&apos;)</span>
+          </div>
         </div>
       ) : (
         <ul className="divide-y divide-border max-h-[480px] overflow-auto">
