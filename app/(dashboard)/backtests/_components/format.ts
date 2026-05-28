@@ -101,8 +101,10 @@ const METRIC_KEYS = {
     'max_drawdown', 'max_dd', 'mdd',
   ],
   total_trades: [
-    'Total Positions',
-    'Total Orders',
+    'Total Positions', 'Positions', 'Position Count',
+    'Total Orders', 'Orders', 'Order Count',
+    'total_positions', 'total_orders',
+    'position_count', 'order_count',
     'total_trades', 'num_trades', 'trade_count', 'trades',
   ],
 } as const
@@ -112,11 +114,29 @@ export function pickMetric(
   kind: keyof typeof METRIC_KEYS,
 ): number | null {
   if (!metrics) return null
-  for (const k of METRIC_KEYS[kind]) {
-    if (!(k in metrics)) continue
-    const n = asNumber(metrics[k])
-    if (n != null) return n
+  const candidates = METRIC_KEYS[kind]
+
+  // 1. Exact-key match (preserves candidate order priority).
+  for (const k of candidates) {
+    if (k in metrics) {
+      const n = asNumber(metrics[k])
+      if (n != null) return n
+    }
   }
+
+  // 2. Case-insensitive fallback. Nautilus / Python writers occasionally
+  // shift casing across versions; a CI sweep keeps the lookup working.
+  const lc = new Map<string, unknown>()
+  for (const [k, v] of Object.entries(metrics)) lc.set(k.toLowerCase(), v)
+  for (const k of candidates) {
+    if (k in metrics) continue // already tried exact
+    const v = lc.get(k.toLowerCase())
+    if (v !== undefined) {
+      const n = asNumber(v)
+      if (n != null) return n
+    }
+  }
+
   return null
 }
 

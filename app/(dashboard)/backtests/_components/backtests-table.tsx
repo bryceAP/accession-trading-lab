@@ -26,6 +26,7 @@ export type BacktestRow = {
   completed_at: string | null
   metrics: Record<string, unknown> | null
   equity_curve: unknown
+  tradeCount: number
 }
 
 type SortKey =
@@ -52,6 +53,14 @@ type Derived = {
 }
 
 function derive(row: BacktestRow): Derived {
+  // Trade count: prefer the actual count from the trades table (the same
+  // source the detail page uses to render the trades section). Fall back
+  // to whatever the metrics jsonb happens to expose if no trade rows are
+  // recorded for this backtest.
+  const fromTrades = row.tradeCount
+  const fromMetric = pickMetric(row.metrics, 'total_trades')
+  const total_trades = fromTrades > 0 ? fromTrades : fromMetric
+
   return {
     row,
     total_pnl: pickMetric(row.metrics, 'total_pnl'),
@@ -60,7 +69,7 @@ function derive(row: BacktestRow): Derived {
     // Max DD is not in metrics — compute from equity_curve. Stored as
     // a positive magnitude ($); rendered with a leading minus.
     max_drawdown: maxDrawdownFromCurve(row.equity_curve),
-    total_trades: pickMetric(row.metrics, 'total_trades'),
+    total_trades,
   }
 }
 
