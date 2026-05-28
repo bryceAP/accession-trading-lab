@@ -37,7 +37,7 @@ type Trade = {
   side: string | null
   entry_price: number | null
   exit_price: number | null
-  qty: number | null
+  quantity: number | null
   pnl: number | null
 }
 
@@ -84,7 +84,7 @@ export default async function BacktestDetailPage({
       .maybeSingle(),
     supabase
       .from('trades')
-      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, qty, pnl')
+      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl')
       .eq('backtest_id', params.id)
       .order('entry_ts', { ascending: true }),
     supabase
@@ -94,6 +94,9 @@ export default async function BacktestDetailPage({
       .eq('target_id', params.id)
       .order('created_at', { ascending: false }),
   ])
+
+  const errs = [btRes.error, tradesRes.error, notesRes.error].filter(Boolean)
+  if (errs.length) console.error('[BacktestDetail]', params.id, errs)
 
   const backtest = btRes.data as Backtest | null
   const trades = (tradesRes.data ?? []) as Trade[]
@@ -296,7 +299,7 @@ function TradesTable({ trades }: { trades: Trade[] }) {
                   {t.exit_price != null ? t.exit_price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
                 </td>
                 <td className="px-3 py-1.5 text-right font-mono tabular-nums">
-                  {t.qty != null ? t.qty.toLocaleString('en-US') : '—'}
+                  {t.quantity != null ? t.quantity.toLocaleString('en-US') : '—'}
                 </td>
                 <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', pnlClass(t.pnl))}>
                   {t.pnl == null ? '—' : fmtUsd(t.pnl, { signed: true })}
