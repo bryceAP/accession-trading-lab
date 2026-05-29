@@ -42,6 +42,7 @@ type Trade = {
   commission: number | null
   slippage: number | null
   source: string | null
+  exit_reason: string | null
 }
 
 function normalizeEquityCurve(raw: unknown): EquityPoint[] {
@@ -87,7 +88,7 @@ export default async function BacktestDetailPage({
       .maybeSingle(),
     supabase
       .from('trades')
-      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, source')
+      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, source, exit_reason')
       .eq('backtest_id', params.id)
       .order('entry_ts', { ascending: true }),
     supabase
@@ -142,6 +143,8 @@ export default async function BacktestDetailPage({
   // safe default is "estimated".
   const runSource = trades[0]?.source ?? 'backtest'
   const costsKind: 'estimated' | 'actual' = runSource === 'backtest' ? 'estimated' : 'actual'
+
+  const exitBreakdown = buildExitBreakdown(trades)
 
   return (
     <div className="p-6 space-y-5 max-w-[1400px]">
@@ -297,6 +300,20 @@ export default async function BacktestDetailPage({
         </div>
       </section>
 
+      {/* ── Exit breakdown ────────────────────────────────────── */}
+      {exitBreakdown.length > 0 && (
+        <section className="rounded border border-border bg-card p-4 space-y-3">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Exit breakdown
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {exitBreakdown.map((g) => (
+              <ExitReasonCard key={g.reason} group={g} />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ── Trades table ──────────────────────────────────────── */}
       <section className="rounded border border-border bg-card overflow-hidden">
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
@@ -344,6 +361,7 @@ function TradesTable({ trades }: { trades: Trade[] }) {
             <th className="px-3 py-2 text-right font-semibold">P&L</th>
             <th className="px-3 py-2 text-right font-semibold">Commission</th>
             <th className="px-3 py-2 text-right font-semibold">Slippage</th>
+            <th className="px-3 py-2 text-left font-semibold">Exit reason</th>
             <th className="px-3 py-2 text-right font-semibold">Duration</th>
           </tr>
         </thead>
@@ -383,6 +401,9 @@ function TradesTable({ trades }: { trades: Trade[] }) {
                 <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', t.slippage != null && 'text-[var(--negative)]')}>
                   {t.slippage == null ? '—' : fmtUsd(t.slippage)}
                 </td>
+                <td className="px-3 py-1.5">
+                  <ExitReasonBadge reason={t.exit_reason} />
+                </td>
                 <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
                   {fmtDuration(duration)}
                 </td>
@@ -417,6 +438,164 @@ function CostStat({
       <div className={cn('font-mono tabular-nums', emphasis ? 'text-base font-semibold' : 'text-sm', cls)}>
         {value}
       </div>
+    </div>
+  )
+}
+
+const EXIT_REASON_ORDER = ['target', 'hard_stop', 'structural_stop', 'force_flat', 'other'] as const
+const EXIT_REASON_LABEL: Record<string, string> = {
+  target: 'Target',
+  hard_stop: 'Hard stop',
+  structural_stop: 'Structural stop',
+  force_flat: 'Force flat',
+  other: 'Other',
+}
+
+type ExitReasonKind = 'positive' | 'negative' | 'neutral'
+
+function exitReasonKind(reason: string | null | undefined): ExitReasonKind {
+  if (reason === 'target') return 'positive'
+  if (reason === 'hard_stop') return 'negative'
+  return 'neutral'
+}
+
+function exitReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return '—'
+  return EXIT_REASON_LABEL[reason] ?? reason
+}
+
+function ExitReasonBadge({ reason }: { reason: string | null | undefined }) {
+  if (!reason) {
+    return <span className="text-muted-foreground font-mono text-[11px]">—</span>
+  }
+  const kind = exitReasonKind(reason)
+  const cls =
+    kind === 'positive'
+      ? 'border-[var(--positive)]/30 text-[var(--positive)] bg-[var(--positive)]/10'
+      : kind === 'negative'
+        ? 'border-[var(--negative)]/30 text-[var(--negative)] bg-[var(--negative)]/10'
+        : 'border-border text-muted-foreground bg-muted/30'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium tracking-wider uppercase whitespace-nowrap',
+        cls,
+      )}
+    >
+      {exitReasonLabel(reason)}
+    </span>
+  )
+}
+
+type SideAgg = { count: number; netPnl: number; wins: number; withPnl: number }
+type ExitReasonGroup = {
+  reason: string | null
+  total: SideAgg
+  long: SideAgg
+  short: SideAgg
+}
+
+function emptyAgg(): SideAgg {
+  return { count: 0, netPnl: 0, wins: 0, withPnl: 0 }
+}
+
+function isShortSide(side: string | null | undefined): boolean {
+  return (side ?? '').toLowerCase().startsWith('s')
+}
+
+function addToAgg(agg: SideAgg, t: Trade): void {
+  agg.count += 1
+  // Net = gross pnl − commission − slippage, matching the Trading-costs panel.
+  // Treat null commission/slippage as 0 so older trades don't poison the total.
+  const net = (t.pnl ?? 0) - (t.commission ?? 0) - (t.slippage ?? 0)
+  agg.netPnl += net
+  if (t.pnl != null) {
+    agg.withPnl += 1
+    if (t.pnl > 0) agg.wins += 1
+  }
+}
+
+function buildExitBreakdown(trades: Trade[]): ExitReasonGroup[] {
+  const map = new Map<string | null, ExitReasonGroup>()
+  for (const t of trades) {
+    const reason = t.exit_reason ?? null
+    let g = map.get(reason)
+    if (!g) {
+      g = { reason, total: emptyAgg(), long: emptyAgg(), short: emptyAgg() }
+      map.set(reason, g)
+    }
+    addToAgg(g.total, t)
+    if (isShortSide(t.side)) addToAgg(g.short, t)
+    else addToAgg(g.long, t)
+  }
+
+  // Canonical order first (target → hard_stop → structural_stop → force_flat
+  // → other), then any unknown reasons alphabetically, then null last.
+  const out: ExitReasonGroup[] = []
+  for (const k of EXIT_REASON_ORDER) {
+    const g = map.get(k)
+    if (g) out.push(g)
+  }
+  const unknowns: ExitReasonGroup[] = []
+  map.forEach((g, k) => {
+    if (k == null) return
+    if ((EXIT_REASON_ORDER as readonly string[]).includes(k)) return
+    unknowns.push(g)
+  })
+  unknowns.sort((a, b) => String(a.reason).localeCompare(String(b.reason)))
+  out.push(...unknowns)
+  const nullGroup = map.get(null)
+  if (nullGroup) out.push(nullGroup)
+  return out
+}
+
+function ExitReasonCard({ group }: { group: ExitReasonGroup }) {
+  return (
+    <div className="rounded border border-border bg-card px-3 py-3 space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <ExitReasonBadge reason={group.reason} />
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+          {group.total.count} trade{group.total.count === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <SideAggBlock label="Long" agg={group.long} />
+        <SideAggBlock label="Short" agg={group.short} />
+      </div>
+    </div>
+  )
+}
+
+function SideAggBlock({ label, agg }: { label: string; agg: SideAgg }) {
+  const winRate = agg.withPnl > 0 ? agg.wins / agg.withPnl : null
+  const sideClass = label === 'Short' ? 'text-[var(--negative)]' : 'text-[var(--positive)]'
+  return (
+    <div className="rounded border border-border bg-muted/20 px-2.5 py-2 space-y-1.5">
+      <div className={cn('text-[10px] font-semibold uppercase tracking-widest', sideClass)}>
+        {label}
+      </div>
+      {agg.count === 0 ? (
+        <div className="text-xs text-muted-foreground font-mono">—</div>
+      ) : (
+        <div className="space-y-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Count</span>
+            <span className="text-xs font-mono tabular-nums">{agg.count}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Net</span>
+            <span className={cn('text-xs font-mono tabular-nums', pnlClass(agg.netPnl))}>
+              {fmtUsd(agg.netPnl, { signed: true })}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Win</span>
+            <span className="text-xs font-mono tabular-nums">
+              {winRate == null ? '—' : `${(winRate * 100).toFixed(1)}%`}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
