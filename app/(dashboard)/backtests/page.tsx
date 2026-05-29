@@ -19,18 +19,24 @@ export default async function BacktestsPage() {
   // Trade count per backtest from the trades table — same source the detail
   // page uses to render the trades section, so the Trades column always
   // matches what's actually recorded (independent of metric-key naming).
+  // Use a server-side HEAD count per backtest: fetching `backtest_id` for all
+  // trades at once gets truncated by Supabase's default row cap (~1000) when
+  // the total trade count across all backtests exceeds it, which silently
+  // undercounts every row.
   const ids = queryRows.map((r) => r.id)
   const tradeCountById = new Map<string, number>()
   if (ids.length > 0) {
-    const { data: tradeRows, error: tradesErr } = await supabase
-      .from('trades')
-      .select('backtest_id')
-      .in('backtest_id', ids)
-    if (tradesErr) console.error('[BacktestsList trades]', tradesErr)
-    for (const t of (tradeRows ?? []) as { backtest_id: string | null }[]) {
-      if (!t.backtest_id) continue
-      tradeCountById.set(t.backtest_id, (tradeCountById.get(t.backtest_id) ?? 0) + 1)
-    }
+    const counts = await Promise.all(
+      ids.map(async (id) => {
+        const { count, error: cErr } = await supabase
+          .from('trades')
+          .select('*', { count: 'exact', head: true })
+          .eq('backtest_id', id)
+        if (cErr) console.error('[BacktestsList trades]', id, cErr)
+        return [id, count ?? 0] as const
+      }),
+    )
+    for (const [id, n] of counts) tradeCountById.set(id, n)
   }
 
   const rows: BacktestRow[] = queryRows.map((r) => ({
