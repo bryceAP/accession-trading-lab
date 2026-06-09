@@ -30,9 +30,7 @@ export type BacktestRow = {
 }
 
 type SortKey =
-  | 'strategy_name'
   | 'instrument'
-  | 'timeframe'
   | 'start_date'
   | 'total_pnl'
   | 'win_rate'
@@ -51,6 +49,11 @@ type Derived = {
   max_drawdown: number | null
   total_trades: number | null
 }
+
+const TIMEFRAMES = ['1m', '5m', '30m', '1h', '1d'] as const
+type Timeframe = (typeof TIMEFRAMES)[number]
+type TimeframeFilter = Timeframe | 'all'
+const UNNAMED_STRATEGY = '— Unnamed —'
 
 function derive(row: BacktestRow): Derived {
   // Trade count: prefer the actual count from the trades table (the same
@@ -85,9 +88,7 @@ function cmp(a: unknown, b: unknown): number {
 
 function getSortValue(d: Derived, key: SortKey): unknown {
   switch (key) {
-    case 'strategy_name': return d.row.strategy_name
     case 'instrument': return d.row.instrument
-    case 'timeframe': return d.row.timeframe
     case 'start_date': return d.row.start_date
     case 'completed_at': return d.row.completed_at
     case 'total_pnl': return d.total_pnl
@@ -101,15 +102,11 @@ function getSortValue(d: Derived, key: SortKey): unknown {
 export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
   const [sortKey, setSortKey] = useState<SortKey>('completed_at')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [strategyFilter, setStrategyFilter] = useState<string>('')
   const [instrumentFilter, setInstrumentFilter] = useState<string>('')
+  const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
 
   const derived = useMemo(() => rows.map(derive), [rows])
 
-  const strategies = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.strategy_name).filter(Boolean) as string[])).sort(),
-    [rows],
-  )
   const instruments = useMemo(
     () => Array.from(new Set(rows.map((r) => r.instrument).filter(Boolean) as string[])).sort(),
     [rows],
@@ -117,11 +114,11 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
 
   const filtered = useMemo(() => {
     return derived.filter((d) => {
-      if (strategyFilter && d.row.strategy_name !== strategyFilter) return false
       if (instrumentFilter && d.row.instrument !== instrumentFilter) return false
+      if (timeframeFilter !== 'all' && d.row.timeframe !== timeframeFilter) return false
       return true
     })
-  }, [derived, strategyFilter, instrumentFilter])
+  }, [derived, instrumentFilter, timeframeFilter])
 
   const sorted = useMemo(() => {
     const out = [...filtered]
@@ -131,6 +128,23 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     })
     return out
   }, [filtered, sortKey, sortDir])
+
+  // Group preserving the sorted order — sections appear in the order their
+  // first row would, so sorting by completed_at desc floats the most-recently-
+  // active strategy to the top.
+  const grouped = useMemo(() => {
+    const map = new Map<string, Derived[]>()
+    for (const d of sorted) {
+      const key = d.row.strategy_name ?? UNNAMED_STRATEGY
+      let arr = map.get(key)
+      if (!arr) {
+        arr = []
+        map.set(key, arr)
+      }
+      arr.push(d)
+    }
+    return Array.from(map.entries())
+  }, [sorted])
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -151,26 +165,39 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     }
   }
 
+  const filtersDirty = instrumentFilter !== '' || timeframeFilter !== 'all'
+
   return (
     <div className="space-y-3">
-      {/* ── Filters ─────────────────────────────────────────── */}
+      {/* ── Timeframe chips ─────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
-        <FilterSelect
-          label="Strategy"
-          value={strategyFilter}
-          onChange={setStrategyFilter}
-          options={strategies}
-        />
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+          Timeframe
+        </span>
+        <div className="flex flex-wrap items-center gap-1">
+          {(['all', ...TIMEFRAMES] as TimeframeFilter[]).map((tf) => (
+            <TimeframeChip
+              key={tf}
+              label={tf === 'all' ? 'All' : tf}
+              active={timeframeFilter === tf}
+              onClick={() => setTimeframeFilter(tf)}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* ── Other filters ───────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
         <FilterSelect
           label="Instrument"
           value={instrumentFilter}
           onChange={setInstrumentFilter}
           options={instruments}
         />
-        {(strategyFilter || instrumentFilter) && (
+        {filtersDirty && (
           <button
             type="button"
-            onClick={() => { setStrategyFilter(''); setInstrumentFilter('') }}
+            onClick={() => { setInstrumentFilter(''); setTimeframeFilter('all') }}
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
           >
             Clear filters
@@ -181,41 +208,72 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
         </div>
       </div>
 
-      {/* ── Table ───────────────────────────────────────────── */}
-      <div className="rounded border border-border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border bg-muted/30">
-                <Th label="Strategy"   k="strategy_name"  sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <Th label="Instrument" k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <Th label="TF"         k="timeframe"      sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <Th label="Date range" k="start_date"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <Th label="Total P&L"  k="total_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                <Th label="Win rate"   k="win_rate"       sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                <Th label="Sharpe"     k="sharpe"         sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                <Th label="Max DD"     k="max_drawdown"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                <Th label="Trades"     k="total_trades"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                <Th label="Completed"  k="completed_at"   sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.length === 0 ? (
-                <tr>
-                  <td colSpan={10} className="px-3 py-6 text-center text-xs text-muted-foreground">
-                    {rows.length === 0 ? 'No backtests recorded yet.' : 'No backtests match the current filters.'}
-                  </td>
-                </tr>
-              ) : (
-                sorted.map((d) => (
-                  <BodyRow key={d.row.id} d={d} />
-                ))
-              )}
-            </tbody>
-          </table>
+      {/* ── Grouped sections ────────────────────────────────── */}
+      {grouped.length === 0 ? (
+        <div className="rounded border border-border bg-card px-3 py-6 text-center text-xs text-muted-foreground">
+          {rows.length === 0 ? 'No backtests recorded yet.' : 'No backtests match the current filters.'}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-4">
+          {grouped.map(([strategy, items]) => (
+            <StrategySection
+              key={strategy}
+              strategy={strategy}
+              items={items}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={toggleSort}
+            />
+          ))}
+        </div>
+      )}
     </div>
+  )
+}
+
+function StrategySection({
+  strategy,
+  items,
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  strategy: string
+  items: Derived[]
+  sortKey: SortKey
+  sortDir: SortDir
+  onSort: (k: SortKey) => void
+}) {
+  return (
+    <section className="rounded border border-border bg-card overflow-hidden">
+      <header className="flex items-baseline justify-between border-b border-border bg-muted/30 px-3 py-2">
+        <h2 className="text-xs font-semibold tracking-tight text-foreground">{strategy}</h2>
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+          {items.length} {items.length === 1 ? 'backtest' : 'backtests'}
+        </span>
+      </header>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border bg-muted/10">
+              <Th label="Instrument" k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <Th label="Date range" k="start_date"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <Th label="Total P&L"  k="total_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Win rate"   k="win_rate"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Sharpe"     k="sharpe"         sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Max DD"     k="max_drawdown"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Trades"     k="total_trades"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Completed"  k="completed_at"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((d) => (
+              <BodyRow key={d.row.id} d={d} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 
@@ -227,15 +285,18 @@ function BodyRow({ d }: { d: Derived }) {
       <td className="px-3 py-2">
         <Link
           href={`/backtests/${row.id}`}
-          className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2"
+          className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono"
         >
-          {row.strategy_name ?? '—'}
+          {row.instrument ?? '—'}
         </Link>
       </td>
-      <td className="px-3 py-2 font-mono text-muted-foreground">{row.instrument ?? '—'}</td>
-      <td className="px-3 py-2 font-mono text-muted-foreground">{row.timeframe ?? '—'}</td>
-      <td className="px-3 py-2 font-mono text-muted-foreground tabular-nums whitespace-nowrap">
-        {fmtDate(row.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(row.end_date)}
+      <td className="px-3 py-2 whitespace-nowrap">
+        <span className="inline-flex items-center gap-2">
+          <TimeframeBadge value={row.timeframe} />
+          <span className="font-mono text-muted-foreground tabular-nums">
+            {fmtDate(row.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(row.end_date)}
+          </span>
+        </span>
       </td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.total_pnl))}>
         {d.total_pnl == null ? '—' : fmtUsd(d.total_pnl, { signed: true })}
@@ -253,6 +314,43 @@ function BodyRow({ d }: { d: Derived }) {
         {completed ? relativeTime(completed) : '—'}
       </td>
     </tr>
+  )
+}
+
+function TimeframeBadge({ value }: { value: string | null }) {
+  if (!value) {
+    return <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
+  }
+  return (
+    <span className="inline-flex h-5 items-center rounded border border-border bg-muted/40 px-1.5 font-mono text-[10px] uppercase tracking-wide text-foreground/80">
+      {value}
+    </span>
+  )
+}
+
+function TimeframeChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'h-7 rounded-full border px-2.5 font-mono text-[11px] uppercase tracking-wide transition-colors',
+        active
+          ? 'border-foreground/60 bg-foreground/10 text-foreground'
+          : 'border-border bg-card text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+      )}
+    >
+      {label}
+    </button>
   )
 }
 
