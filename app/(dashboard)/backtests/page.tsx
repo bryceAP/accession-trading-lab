@@ -1,3 +1,5 @@
+import Link from 'next/link'
+import { GitCompare } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { BacktestsTable, type BacktestRow } from './_components/backtests-table'
@@ -46,15 +48,24 @@ export default async function BacktestsPage() {
 
   return (
     <div className="p-6 space-y-4 max-w-[1400px]">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-sm font-semibold tracking-tight">Backtests</h1>
-        {error ? (
-          <Badge variant="destructive" className="text-xs">DB error</Badge>
-        ) : (
-          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-            {rows.length} total
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          <Link
+            href="/backtests/compare"
+            className="inline-flex items-center gap-1.5 rounded border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          >
+            <GitCompare className="h-3 w-3" />
+            Compare runs
+          </Link>
+          {error ? (
+            <Badge variant="destructive" className="text-xs">DB error</Badge>
+          ) : (
+            <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+              {rows.length} total
+            </span>
+          )}
+        </div>
       </div>
 
       <BacktestsTable rows={rows} />

@@ -107,6 +107,10 @@ const METRIC_KEYS = {
     'position_count', 'order_count',
     'total_trades', 'num_trades', 'trade_count', 'trades',
   ],
+  profit_factor: [
+    'Profit Factor',
+    'profit_factor', 'pf',
+  ],
 } as const
 
 export function pickMetric(
