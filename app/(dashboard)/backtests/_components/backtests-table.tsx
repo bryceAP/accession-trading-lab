@@ -50,7 +50,7 @@ type Derived = {
   total_trades: number | null
 }
 
-const TIMEFRAMES = ['1m', '5m', '30m', '1h', '1d'] as const
+const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '1d'] as const
 type Timeframe = (typeof TIMEFRAMES)[number]
 type TimeframeFilter = Timeframe | 'all'
 const UNNAMED_STRATEGY = '— Unnamed —'
