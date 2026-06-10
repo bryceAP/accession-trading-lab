@@ -28,7 +28,20 @@ type Backtest = {
   completed_at: string | null
   metrics: Record<string, unknown> | null
   equity_curve: unknown
+  // Optional runner-populated aggregate; falls back to client compute when absent.
+  exit_breakdown: unknown
 }
+
+// Pagination + plot caps. Supabase caps a single .select() at ~1000 rows, so
+// summary panels were silently undercounting on high-frequency runs (1m cells
+// often produce 10k+ trades). We fan out across pages and cap rendering.
+const TRADE_PAGE_SIZE = 1000
+const TRADE_FETCH_CONCURRENCY = 8
+const TRADES_TABLE_MAX = 1000
+const EQUITY_PLOT_MAX = 2000
+const MARKER_PLOT_MAX = 500
+const TRADE_COLUMNS =
+  'id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, source, exit_reason'
 
 type Trade = {
   id: string | number
@@ -73,6 +86,99 @@ function tradesToMarkers(trades: Trade[]): TradeMarker[] {
     }))
 }
 
+// Even-stride downsample, always preserving the last element so the chart
+// reflects the final equity / latest trade.
+function stride<T>(arr: T[], max: number): T[] {
+  if (arr.length <= max) return arr
+  const step = Math.ceil(arr.length / max)
+  const out: T[] = []
+  for (let i = 0; i < arr.length; i += step) out.push(arr[i])
+  if (out[out.length - 1] !== arr[arr.length - 1]) out.push(arr[arr.length - 1])
+  return out
+}
+
+async function fetchAllTrades(
+  supabase: ReturnType<typeof createClient>,
+  backtestId: string,
+): Promise<Trade[]> {
+  const { count, error: countErr } = await supabase
+    .from('trades')
+    .select('*', { count: 'exact', head: true })
+    .eq('backtest_id', backtestId)
+  if (countErr) {
+    console.error('[BacktestDetail trades count]', backtestId, countErr)
+    return []
+  }
+  const total = count ?? 0
+  if (total === 0) return []
+
+  const pages = Math.ceil(total / TRADE_PAGE_SIZE)
+  const pageResults: Trade[][] = new Array(pages)
+  let next = 0
+
+  async function worker() {
+    while (true) {
+      const i = next++
+      if (i >= pages) return
+      const from = i * TRADE_PAGE_SIZE
+      const to = from + TRADE_PAGE_SIZE - 1
+      const { data, error } = await supabase
+        .from('trades')
+        .select(TRADE_COLUMNS)
+        .eq('backtest_id', backtestId)
+        // Secondary order on id keeps pagination deterministic when entry_ts ties.
+        .order('entry_ts', { ascending: true, nullsFirst: false })
+        .order('id', { ascending: true })
+        .range(from, to)
+      if (error) {
+        console.error('[BacktestDetail trades page]', backtestId, i, error)
+        pageResults[i] = []
+        return
+      }
+      pageResults[i] = (data ?? []) as Trade[]
+    }
+  }
+
+  const workers = Math.min(TRADE_FETCH_CONCURRENCY, pages)
+  await Promise.all(Array.from({ length: workers }, () => worker()))
+  return pageResults.flat()
+}
+
+function parseStoredExitBreakdown(raw: unknown): ExitReasonGroup[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const out: ExitReasonGroup[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') return null
+    const g = item as Record<string, unknown>
+    const reason = typeof g.reason === 'string' ? g.reason : g.reason === null ? null : null
+    const total = parseSideAgg(g.total)
+    const long = parseSideAgg(g.long)
+    const short = parseSideAgg(g.short)
+    if (!total || !long || !short) return null
+    out.push({ reason, total, long, short })
+  }
+  return out
+}
+
+function parseSideAgg(raw: unknown): SideAgg | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  const count = pickNum(o, ['count'])
+  const netPnl = pickNum(o, ['netPnl', 'net_pnl'])
+  const wins = pickNum(o, ['wins'])
+  const withPnl = pickNum(o, ['withPnl', 'with_pnl'])
+  if (count == null || netPnl == null || wins == null || withPnl == null) return null
+  return { count, netPnl, wins, withPnl }
+}
+
+function pickNum(o: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = o[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+  }
+  return null
+}
+
 export default async function BacktestDetailPage({
   params,
 }: {
@@ -80,17 +186,14 @@ export default async function BacktestDetailPage({
 }) {
   const supabase = createClient()
 
-  const [btRes, tradesRes, notesRes] = await Promise.all([
+  // The trades fetch is split out and paginated; it's not safe to await it
+  // alongside the others because we don't yet know if the backtest exists.
+  const [btRes, notesRes] = await Promise.all([
     supabase
       .from('backtests')
-      .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve')
+      .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve, exit_breakdown')
       .eq('id', params.id)
       .maybeSingle(),
-    supabase
-      .from('trades')
-      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, source, exit_reason')
-      .eq('backtest_id', params.id)
-      .order('entry_ts', { ascending: true }),
     supabase
       .from('notes')
       .select('id, author, body, created_at')
@@ -99,11 +202,10 @@ export default async function BacktestDetailPage({
       .order('created_at', { ascending: false }),
   ])
 
-  const errs = [btRes.error, tradesRes.error, notesRes.error].filter(Boolean)
-  if (errs.length) console.error('[BacktestDetail]', params.id, errs)
+  if (btRes.error) console.error('[BacktestDetail backtest]', params.id, btRes.error)
+  if (notesRes.error) console.error('[BacktestDetail notes]', params.id, notesRes.error)
 
   const backtest = btRes.data as Backtest | null
-  const trades = (tradesRes.data ?? []) as Trade[]
   const notes = (notesRes.data ?? []) as Note[]
 
   if (!backtest) {
@@ -122,15 +224,27 @@ export default async function BacktestDetailPage({
     )
   }
 
-  const equityCurve = normalizeEquityCurve(backtest.equity_curve)
-  const tradeMarkers = tradesToMarkers(trades)
+  // Pull ALL trades — Supabase caps a single select at ~1000 rows, so
+  // summary panels were silently undercounting on high-frequency runs.
+  const trades = await fetchAllTrades(supabase, params.id)
+
+  // The curve and markers feed the chart only; downsample so 1m runs with
+  // 50k+ points don't blow up render. Costs and breakdown still sum over the
+  // full trades array.
+  const fullEquityCurve = normalizeEquityCurve(backtest.equity_curve)
+  const equityCurve = stride(fullEquityCurve, EQUITY_PLOT_MAX)
+  const allMarkers = tradesToMarkers(trades)
+  const tradeMarkers = stride(allMarkers, MARKER_PLOT_MAX)
+  const equityDownsampled = fullEquityCurve.length > equityCurve.length
+  const markersDownsampled = allMarkers.length > tradeMarkers.length
+
   const completed = backtest.completed_at ? new Date(backtest.completed_at) : null
   const metrics = backtest.metrics ?? {}
 
-  // Trading-cost summary. Treat each trade's pnl as gross (price-action) PnL
-  // and commission/slippage as additive costs. Net = gross − commission −
-  // slippage. Skip rows where the field is null so older trades (recorded
-  // before the columns existed) don't poison the totals.
+  // Trading-cost summary, computed over ALL trades. Treat each trade's pnl
+  // as gross (price-action) PnL and commission/slippage as additive costs.
+  // Net = gross − commission − slippage. Null fields (older trades recorded
+  // before those columns existed) are skipped so they don't poison totals.
   const hasAnyCommission = trades.some((t) => t.commission != null)
   const hasAnySlippage = trades.some((t) => t.slippage != null)
   const totalCommission = trades.reduce((acc, t) => acc + (t.commission ?? 0), 0)
@@ -144,7 +258,14 @@ export default async function BacktestDetailPage({
   const runSource = trades[0]?.source ?? 'backtest'
   const costsKind: 'estimated' | 'actual' = runSource === 'backtest' ? 'estimated' : 'actual'
 
-  const exitBreakdown = buildExitBreakdown(trades)
+  // Prefer the runner-stored aggregate when present; fall back to client compute
+  // so existing rows (and runs predating the column) still render.
+  const exitBreakdown =
+    parseStoredExitBreakdown(backtest.exit_breakdown) ?? buildExitBreakdown(trades)
+
+  const renderedTrades =
+    trades.length > TRADES_TABLE_MAX ? trades.slice(0, TRADES_TABLE_MAX) : trades
+  const tradesTruncated = trades.length > TRADES_TABLE_MAX
 
   return (
     <div className="p-6 space-y-5 max-w-[1400px]">
@@ -196,7 +317,11 @@ export default async function BacktestDetailPage({
             Equity curve
           </h2>
           <span className="text-[10px] text-muted-foreground font-mono">
-            {equityCurve.length.toLocaleString()} pts · {tradeMarkers.length} trade{tradeMarkers.length === 1 ? '' : 's'}
+            {equityCurve.length.toLocaleString()}
+            {equityDownsampled && ` of ${fullEquityCurve.length.toLocaleString()}`} pts
+            {' · '}
+            {tradeMarkers.length.toLocaleString()}
+            {markersDownsampled && ` of ${allMarkers.length.toLocaleString()}`} marker{tradeMarkers.length === 1 ? '' : 's'}
           </span>
         </div>
         <EquityChart curve={equityCurve} trades={tradeMarkers} />
@@ -321,10 +446,18 @@ export default async function BacktestDetailPage({
             Trades
           </h2>
           <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-            {trades.length}
+            {tradesTruncated
+              ? `${renderedTrades.length.toLocaleString()} of ${trades.length.toLocaleString()}`
+              : trades.length.toLocaleString()}
           </span>
         </div>
-        <TradesTable trades={trades} />
+        <TradesTable trades={renderedTrades} />
+        {tradesTruncated && (
+          <div className="border-t border-border bg-muted/20 px-4 py-2 text-[10px] text-muted-foreground font-mono">
+            Showing first {TRADES_TABLE_MAX.toLocaleString()} of {trades.length.toLocaleString()} trades.
+            All summary panels above include the full set.
+          </div>
+        )}
       </section>
 
       {/* ── Notes ─────────────────────────────────────────────── */}
