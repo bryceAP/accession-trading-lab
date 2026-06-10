@@ -10,7 +10,6 @@ import {
   fmtNumber,
   fmtPct,
   fmtUsd,
-  maxDrawdownFromCurve,
   pickMetric,
   pnlClass,
   relativeTime,
@@ -25,8 +24,14 @@ export type BacktestRow = {
   end_date: string | null
   completed_at: string | null
   metrics: Record<string, unknown> | null
-  equity_curve: unknown
-  tradeCount: number
+  // Runner-populated summary columns. The list reads these directly so it
+  // doesn't have to download equity_curve jsonb or HEAD-count trades per row.
+  // Older rows where the runner hasn't backfilled fall through to metrics.
+  net_pnl: number | null
+  max_drawdown: number | null
+  win_rate: number | null
+  sharpe: number | null
+  trades_count: number | null
 }
 
 type SortKey =
@@ -56,23 +61,15 @@ type TimeframeFilter = Timeframe | 'all'
 const UNNAMED_STRATEGY = '— Unnamed —'
 
 function derive(row: BacktestRow): Derived {
-  // Trade count: prefer the actual count from the trades table (the same
-  // source the detail page uses to render the trades section). Fall back
-  // to whatever the metrics jsonb happens to expose if no trade rows are
-  // recorded for this backtest.
-  const fromTrades = row.tradeCount
-  const fromMetric = pickMetric(row.metrics, 'total_trades')
-  const total_trades = fromTrades > 0 ? fromTrades : fromMetric
-
+  // Prefer the runner's typed summary columns. Fall back to fuzzy metrics
+  // lookups so existing rows that predate the columns still render.
   return {
     row,
-    total_pnl: pickMetric(row.metrics, 'total_pnl'),
-    win_rate: pickMetric(row.metrics, 'win_rate'),
-    sharpe: pickMetric(row.metrics, 'sharpe'),
-    // Max DD is not in metrics — compute from equity_curve. Stored as
-    // a positive magnitude ($); rendered with a leading minus.
-    max_drawdown: maxDrawdownFromCurve(row.equity_curve),
-    total_trades,
+    total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
+    win_rate:     row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
+    sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
+    max_drawdown: row.max_drawdown,
+    total_trades: row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
   }
 }
 

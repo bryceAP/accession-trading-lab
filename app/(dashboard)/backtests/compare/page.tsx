@@ -7,14 +7,23 @@ import { CompareView, type CompareBacktest } from './_components/compare-view'
 export default async function BacktestsComparePage() {
   const supabase = createClient()
 
+  // equity_curve is intentionally NOT selected here — it's potentially huge
+  // (1m runs produce 100k+ points) and the selector list never displays it.
+  // CompareView fetches curves lazily for the runs the user actually picks.
   const { data, error } = await supabase
     .from('backtests')
-    .select('id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve')
+    .select(
+      'id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, ' +
+        'net_pnl, max_drawdown, win_rate, sharpe, profit_factor, trades_count',
+    )
     .order('completed_at', { ascending: false })
 
   if (error) console.error('[BacktestsCompare]', error)
 
-  const rows = (data ?? []) as CompareBacktest[]
+  // Casting through unknown because the new typed summary columns aren't
+  // in the generated Supabase types yet — once `supabase gen types` reruns
+  // after the migration ships, this can be a direct cast.
+  const rows = ((data ?? []) as unknown) as CompareBacktest[]
 
   return (
     <div className="p-6 space-y-4 max-w-[1400px]">

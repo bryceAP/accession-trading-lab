@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   CartesianGrid,
@@ -12,15 +12,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { Check } from 'lucide-react'
+import { Check, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
 import {
   fmtDate,
   fmtInt,
   fmtNumber,
   fmtPct,
   fmtUsd,
-  maxDrawdownFromCurve,
   pickMetric,
   pnlClass,
 } from '../../_components/format'
@@ -35,8 +35,15 @@ export type CompareBacktest = {
   end_date: string | null
   completed_at: string | null
   metrics: Record<string, unknown> | null
-  equity_curve: unknown
+  net_pnl: number | null
+  max_drawdown: number | null
+  win_rate: number | null
+  sharpe: number | null
+  profit_factor: number | null
+  trades_count: number | null
 }
+
+type CurveState = unknown | 'loading' | 'error'
 
 const MAX_SELECTION = 5
 const SERIES_COLORS = [
@@ -101,9 +108,14 @@ type Series = {
   relative: { x: number; y: number }[]
 }
 
-function buildSeries(runs: CompareBacktest[]): Series[] {
+function buildSeries(
+  runs: CompareBacktest[],
+  curves: Map<string, CurveState>,
+): Series[] {
   return runs.map((r, i) => {
-    const curve = normalizeCurve(r.equity_curve)
+    const cached = curves.get(r.id)
+    const raw = cached === 'loading' || cached === 'error' ? null : cached
+    const curve = normalizeCurve(raw)
     if (curve.length === 0) {
       return { id: r.id, name: runLabel(r), color: SERIES_COLORS[i % SERIES_COLORS.length], relative: [] }
     }
@@ -193,9 +205,57 @@ export function CompareView({ rows }: { rows: CompareBacktest[] }) {
     return selectedIds.map((id) => byId.get(id)).filter((r): r is CompareBacktest => r != null)
   }, [rows, selectedIds])
 
-  const series = useMemo(() => buildSeries(selectedRuns), [selectedRuns])
+  // Equity curves are fetched lazily — only for the runs the user actually
+  // picks — so navigating to /backtests/compare with 100+ runs doesn't drag
+  // 100 jsonb blobs over the wire. Cached across toggles so re-selecting a
+  // previously-loaded run is instant.
+  const [curves, setCurves] = useState<Map<string, CurveState>>(new Map())
+  const curvesRef = useRef(curves)
+  curvesRef.current = curves
+
+  useEffect(() => {
+    const missing = selectedIds.filter((id) => !curvesRef.current.has(id))
+    if (missing.length === 0) return
+
+    setCurves((prev) => {
+      const next = new Map(prev)
+      for (const id of missing) next.set(id, 'loading')
+      return next
+    })
+
+    const supabase = createClient()
+    let cancelled = false
+    for (const id of missing) {
+      supabase
+        .from('backtests')
+        .select('equity_curve')
+        .eq('id', id)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (cancelled) return
+          setCurves((prev) => {
+            const next = new Map(prev)
+            next.set(id, error ? 'error' : (data?.equity_curve ?? null))
+            return next
+          })
+        })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [selectedIds])
+
+  const series = useMemo(() => buildSeries(selectedRuns, curves), [selectedRuns, curves])
   const mergedData = useMemo(() => mergeSeries(series), [series])
   const hasAnyCurve = series.some((s) => s.relative.length > 0)
+  const loadingIds = useMemo(
+    () => selectedIds.filter((id) => curves.get(id) === 'loading'),
+    [selectedIds, curves],
+  )
+  const errorIds = useMemo(
+    () => selectedIds.filter((id) => curves.get(id) === 'error'),
+    [selectedIds, curves],
+  )
   const atMax = selectedIds.length >= MAX_SELECTION
 
   return (
@@ -222,7 +282,13 @@ export function CompareView({ rows }: { rows: CompareBacktest[] }) {
         </div>
       ) : (
         <>
-          <OverlayChart series={series} mergedData={mergedData} hasAnyCurve={hasAnyCurve} />
+          <OverlayChart
+            series={series}
+            mergedData={mergedData}
+            hasAnyCurve={hasAnyCurve}
+            loadingCount={loadingIds.length}
+            errorCount={errorIds.length}
+          />
           <MetricsTable runs={selectedRuns} series={series} />
         </>
       )}
@@ -329,10 +395,14 @@ function OverlayChart({
   series,
   mergedData,
   hasAnyCurve,
+  loadingCount,
+  errorCount,
 }: {
   series: Series[]
   mergedData: MergedPoint[]
   hasAnyCurve: boolean
+  loadingCount: number
+  errorCount: number
 }) {
   return (
     <section className="rounded border border-border bg-card p-4 space-y-3">
@@ -340,13 +410,29 @@ function OverlayChart({
         <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
           Equity overlay
         </h2>
-        <span className="text-[10px] text-muted-foreground font-mono">
-          P&L since each run&apos;s start, plotted by days elapsed
+        <span className="inline-flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+          {loadingCount > 0 && (
+            <span className="inline-flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              loading {loadingCount}
+            </span>
+          )}
+          {errorCount > 0 && (
+            <span className="text-[var(--negative)]">{errorCount} curve failed</span>
+          )}
+          <span>P&L since each run&apos;s start, plotted by days elapsed</span>
         </span>
       </div>
       {!hasAnyCurve ? (
         <div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-          None of the selected runs have an equity curve.
+          {loadingCount > 0 ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Loading equity curves…
+            </span>
+          ) : (
+            'None of the selected runs have an equity curve.'
+          )}
         </div>
       ) : (
         <div className="h-[320px] w-full">
@@ -463,8 +549,18 @@ const METRIC_SPECS: MetricSpec[] = [
 ]
 
 function valueFor(run: CompareBacktest, key: string): number | null {
-  if (key === 'max_drawdown') return maxDrawdownFromCurve(run.equity_curve)
-  return pickMetric(run.metrics, key as Parameters<typeof pickMetric>[1])
+  // Prefer typed columns; fall back to metrics jsonb for older rows the runner
+  // hasn't backfilled yet. Max drawdown has no metric fallback — when the
+  // column is null the row predates the runner change and shows "—".
+  switch (key) {
+    case 'total_pnl':     return run.net_pnl       ?? pickMetric(run.metrics, 'total_pnl')
+    case 'win_rate':      return run.win_rate      ?? pickMetric(run.metrics, 'win_rate')
+    case 'sharpe':        return run.sharpe        ?? pickMetric(run.metrics, 'sharpe')
+    case 'max_drawdown':  return run.max_drawdown
+    case 'profit_factor': return run.profit_factor ?? pickMetric(run.metrics, 'profit_factor')
+    case 'total_trades':  return run.trades_count  ?? pickMetric(run.metrics, 'total_trades')
+  }
+  return null
 }
 
 function colorClass(spec: MetricSpec, v: number | null): string {
