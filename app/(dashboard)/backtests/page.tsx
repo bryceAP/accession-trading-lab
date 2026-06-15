@@ -8,14 +8,14 @@ export default async function BacktestsPage() {
   const supabase = createClient()
 
   // Summary columns (net_pnl, max_drawdown, win_rate, sharpe, trades_count)
-  // are populated by the runner per-row, so the list page no longer pulls
-  // equity_curve jsonb or fans out N parallel HEAD counts to derive those
-  // values. Older rows missing the columns fall back to metrics jsonb in
-  // the table component.
+  // and duration_ms are populated by the runner per-row, so the list page
+  // no longer pulls equity_curve jsonb or fans out N parallel HEAD counts
+  // to derive those values. Older rows missing the columns fall back to
+  // metrics jsonb in the table component.
   const { data, error } = await supabase
     .from('backtests')
     .select(
-      'id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics, ' +
+      'id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, duration_ms, metrics, ' +
         'net_pnl, max_drawdown, win_rate, sharpe, trades_count',
     )
     .order('completed_at', { ascending: false })

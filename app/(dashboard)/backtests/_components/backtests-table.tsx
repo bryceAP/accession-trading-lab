@@ -1,19 +1,27 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   fmtDate,
+  fmtDateTimeWithSeconds,
+  fmtElapsed,
   fmtInt,
   fmtNumber,
   fmtPct,
   fmtUsd,
   pickMetric,
   pnlClass,
-  relativeTime,
 } from './format'
+import {
+  buildRunParamBadges,
+  parseRunParams,
+  RunParamBadges,
+  type RunParamBadge,
+  type RunParams,
+} from './run-params'
 
 export type BacktestRow = {
   id: string
@@ -23,6 +31,7 @@ export type BacktestRow = {
   start_date: string | null
   end_date: string | null
   completed_at: string | null
+  duration_ms: number | null
   metrics: Record<string, unknown> | null
   // Runner-populated summary columns. The list reads these directly so it
   // doesn't have to download equity_curve jsonb or HEAD-count trades per row.
@@ -42,6 +51,7 @@ type SortKey =
   | 'sharpe'
   | 'max_drawdown'
   | 'total_trades'
+  | 'duration'
   | 'completed_at'
 
 type SortDir = 'asc' | 'desc'
@@ -53,16 +63,23 @@ type Derived = {
   sharpe: number | null
   max_drawdown: number | null
   total_trades: number | null
+  // Parsed once so filtering + rendering don't re-walk the metrics jsonb.
+  // Rows where the runner hasn't written run_params yet land at null and
+  // skip badge rendering / filters entirely.
+  runParams: RunParams | null
+  runParamBadges: RunParamBadge[]
 }
 
 const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '1d'] as const
 type Timeframe = (typeof TIMEFRAMES)[number]
 type TimeframeFilter = Timeframe | 'all'
+type StringFilter = string | 'all'
 const UNNAMED_STRATEGY = '— Unnamed —'
 
 function derive(row: BacktestRow): Derived {
   // Prefer the runner's typed summary columns. Fall back to fuzzy metrics
   // lookups so existing rows that predate the columns still render.
+  const runParams = parseRunParams(row.metrics)
   return {
     row,
     total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
@@ -70,6 +87,8 @@ function derive(row: BacktestRow): Derived {
     sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
     max_drawdown: row.max_drawdown,
     total_trades: row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
+    runParams,
+    runParamBadges: buildRunParamBadges(runParams),
   }
 }
 
@@ -93,6 +112,7 @@ function getSortValue(d: Derived, key: SortKey): unknown {
     case 'sharpe': return d.sharpe
     case 'max_drawdown': return d.max_drawdown
     case 'total_trades': return d.total_trades
+    case 'duration': return d.row.duration_ms
   }
 }
 
@@ -101,6 +121,8 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [instrumentFilter, setInstrumentFilter] = useState<string>('')
   const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
+  const [entryModeFilter, setEntryModeFilter] = useState<StringFilter>('all')
+  const [fillTfFilter, setFillTfFilter] = useState<StringFilter>('all')
 
   const derived = useMemo(() => rows.map(derive), [rows])
 
@@ -109,13 +131,32 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     [rows],
   )
 
+  // Derive entry_mode / fill_tf options from the data so the chip set
+  // adapts if the runner introduces new values. Sorted for stability.
+  const entryModes = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of derived) if (d.runParams?.entry_mode) set.add(d.runParams.entry_mode)
+    return Array.from(set).sort()
+  }, [derived])
+
+  const fillTfs = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of derived) if (d.runParams?.fill_tf) set.add(d.runParams.fill_tf)
+    return Array.from(set).sort()
+  }, [derived])
+
   const filtered = useMemo(() => {
     return derived.filter((d) => {
       if (instrumentFilter && d.row.instrument !== instrumentFilter) return false
       if (timeframeFilter !== 'all' && d.row.timeframe !== timeframeFilter) return false
+      // Rows without run_params don't match a specific entry_mode/fill_tf
+      // filter — they're filtered out rather than silently included, so
+      // the cell-isolation use case stays honest.
+      if (entryModeFilter !== 'all' && d.runParams?.entry_mode !== entryModeFilter) return false
+      if (fillTfFilter !== 'all' && d.runParams?.fill_tf !== fillTfFilter) return false
       return true
     })
-  }, [derived, instrumentFilter, timeframeFilter])
+  }, [derived, instrumentFilter, timeframeFilter, entryModeFilter, fillTfFilter])
 
   const sorted = useMemo(() => {
     const out = [...filtered]
@@ -155,6 +196,7 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
         'sharpe',
         'max_drawdown',
         'total_trades',
+        'duration',
         'completed_at',
         'start_date',
       ]
@@ -162,26 +204,72 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     }
   }
 
-  const filtersDirty = instrumentFilter !== '' || timeframeFilter !== 'all'
+  const filtersDirty =
+    instrumentFilter !== '' ||
+    timeframeFilter !== 'all' ||
+    entryModeFilter !== 'all' ||
+    fillTfFilter !== 'all'
+
+  function clearFilters() {
+    setInstrumentFilter('')
+    setTimeframeFilter('all')
+    setEntryModeFilter('all')
+    setFillTfFilter('all')
+  }
 
   return (
     <div className="space-y-3">
       {/* ── Timeframe chips ─────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-          Timeframe
-        </span>
-        <div className="flex flex-wrap items-center gap-1">
-          {(['all', ...TIMEFRAMES] as TimeframeFilter[]).map((tf) => (
-            <TimeframeChip
-              key={tf}
-              label={tf === 'all' ? 'All' : tf}
-              active={timeframeFilter === tf}
-              onClick={() => setTimeframeFilter(tf)}
-            />
-          ))}
+      <ChipRow label="Timeframe">
+        {(['all', ...TIMEFRAMES] as TimeframeFilter[]).map((tf) => (
+          <FilterChip
+            key={tf}
+            label={tf === 'all' ? 'All' : tf}
+            active={timeframeFilter === tf}
+            onClick={() => setTimeframeFilter(tf)}
+          />
+        ))}
+      </ChipRow>
+
+      {/* ── Run-param chips ─────────────────────────────────── */}
+      {(entryModes.length > 0 || fillTfs.length > 0) && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          {entryModes.length > 0 && (
+            <ChipRow label="Entry mode">
+              <FilterChip
+                label="All"
+                active={entryModeFilter === 'all'}
+                onClick={() => setEntryModeFilter('all')}
+              />
+              {entryModes.map((m) => (
+                <FilterChip
+                  key={m}
+                  label={m}
+                  active={entryModeFilter === m}
+                  onClick={() => setEntryModeFilter(m)}
+                />
+              ))}
+            </ChipRow>
+          )}
+          {fillTfs.length > 0 && (
+            <ChipRow label="Fill TF">
+              <FilterChip
+                label="All"
+                active={fillTfFilter === 'all'}
+                onClick={() => setFillTfFilter('all')}
+              />
+              {fillTfs.map((t) => (
+                <FilterChip
+                  key={t}
+                  label={t}
+                  active={fillTfFilter === t}
+                  onClick={() => setFillTfFilter(t)}
+                />
+              ))}
+            </ChipRow>
+          )}
         </div>
-      </div>
+      )}
 
       {/* ── Other filters ───────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
@@ -194,7 +282,7 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
         {filtersDirty && (
           <button
             type="button"
-            onClick={() => { setInstrumentFilter(''); setTimeframeFilter('all') }}
+            onClick={clearFilters}
             className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
           >
             Clear filters
@@ -241,26 +329,41 @@ function StrategySection({
   sortDir: SortDir
   onSort: (k: SortKey) => void
 }) {
+  const [collapsed, setCollapsed] = useState(false)
+  const Chevron = collapsed ? ChevronRight : ChevronDown
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
-      <header className="flex items-baseline justify-between border-b border-border bg-muted/30 px-3 py-2">
-        <h2 className="text-xs font-semibold tracking-tight text-foreground">{strategy}</h2>
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        className={cn(
+          'w-full flex items-baseline justify-between bg-muted/30 px-3 py-2 text-left cursor-pointer hover:bg-muted/50 transition-colors',
+          !collapsed && 'border-b border-border',
+        )}
+      >
+        <span className="flex items-center gap-1.5">
+          <Chevron className="h-3 w-3 text-muted-foreground" />
+          <span className="text-xs font-semibold tracking-tight text-foreground">{strategy}</span>
+        </span>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
           {items.length} {items.length === 1 ? 'backtest' : 'backtests'}
         </span>
-      </header>
+      </button>
+      {!collapsed && (
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border bg-muted/10">
-              <Th label="Instrument" k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <Th label="Backtest"   k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
               <Th label="Date range" k="start_date"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
               <Th label="Total P&L"  k="total_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Win rate"   k="win_rate"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"     k="sharpe"         sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"     k="max_drawdown"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Trades"     k="total_trades"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Completed"  k="completed_at"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Duration"   k="duration"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Ran at"     k="completed_at"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
             </tr>
           </thead>
           <tbody>
@@ -270,30 +373,32 @@ function StrategySection({
           </tbody>
         </table>
       </div>
+      )}
     </section>
   )
 }
 
 function BodyRow({ d }: { d: Derived }) {
   const { row } = d
-  const completed = row.completed_at ? new Date(row.completed_at) : null
   return (
     <tr className="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
       <td className="px-3 py-2">
         <Link
           href={`/backtests/${row.id}`}
-          className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono"
+          className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono whitespace-nowrap"
         >
-          {row.instrument ?? '—'}
+          {row.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {row.timeframe ?? '—'}
         </Link>
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">
-        <span className="inline-flex items-center gap-2">
-          <TimeframeBadge value={row.timeframe} />
-          <span className="font-mono text-muted-foreground tabular-nums">
+      <td className="px-3 py-2">
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-muted-foreground tabular-nums whitespace-nowrap">
             {fmtDate(row.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(row.end_date)}
           </span>
-        </span>
+          {d.runParamBadges.length > 0 && (
+            <RunParamBadges badges={d.runParamBadges} />
+          )}
+        </div>
       </td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.total_pnl))}>
         {d.total_pnl == null ? '—' : fmtUsd(d.total_pnl, { signed: true })}
@@ -304,28 +409,37 @@ function BodyRow({ d }: { d: Derived }) {
         {d.max_drawdown == null ? '—' : d.max_drawdown === 0 ? fmtUsd(0) : `−${fmtUsd(d.max_drawdown)}`}
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtInt(d.total_trades)}</td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">
+        {row.duration_ms != null ? (
+          fmtElapsed(row.duration_ms)
+        ) : row.completed_at == null ? (
+          <span className="text-muted-foreground italic">Running…</span>
+        ) : (
+          '—'
+        )}
+      </td>
       <td
         className="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground whitespace-nowrap"
         title={row.completed_at ?? undefined}
       >
-        {completed ? relativeTime(completed) : '—'}
+        {fmtDateTimeWithSeconds(row.completed_at)}
       </td>
     </tr>
   )
 }
 
-function TimeframeBadge({ value }: { value: string | null }) {
-  if (!value) {
-    return <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
-  }
+function ChipRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <span className="inline-flex h-5 items-center rounded border border-border bg-muted/40 px-1.5 font-mono text-[10px] uppercase tracking-wide text-foreground/80">
-      {value}
-    </span>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <div className="flex flex-wrap items-center gap-1">{children}</div>
+    </div>
   )
 }
 
-function TimeframeChip({
+function FilterChip({
   label,
   active,
   onClick,
