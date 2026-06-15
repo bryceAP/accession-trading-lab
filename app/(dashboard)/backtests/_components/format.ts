@@ -84,6 +84,31 @@ export function fmtElapsed(ms: number | null | undefined): string {
   return `${h}h ${m}m`
 }
 
+export const TIMEFRAME_OPTIONS = [
+  { value: '1m',   label: '1 min' },
+  { value: '3m',   label: '3 min' },
+  { value: '5m',   label: '5 min' },
+  { value: '15m',  label: '15 min' },
+  { value: '30m',  label: '30 min' },
+  { value: '1h',   label: '1 hr' },
+  { value: '81m',  label: '81 min' },
+  { value: '135m', label: '135' },
+  { value: '1d',   label: 'D' },
+  { value: '1w',   label: 'W' },
+  { value: '1M',   label: 'M' },
+] as const
+
+export type TimeframeValue = (typeof TIMEFRAME_OPTIONS)[number]['value']
+
+const TIMEFRAME_LABEL_MAP: Record<string, string> = Object.fromEntries(
+  TIMEFRAME_OPTIONS.map((o) => [o.value, o.label]),
+)
+
+export function timeframeLabel(value: string | null | undefined): string {
+  if (!value) return '—'
+  return TIMEFRAME_LABEL_MAP[value] ?? value
+}
+
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || Number.isNaN(ms) || ms < 0) return '—'
   const s = Math.floor(ms / 1000)

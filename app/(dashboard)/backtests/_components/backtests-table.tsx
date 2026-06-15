@@ -14,6 +14,9 @@ import {
   fmtUsd,
   pickMetric,
   pnlClass,
+  timeframeLabel,
+  TIMEFRAME_OPTIONS,
+  type TimeframeValue,
 } from './format'
 import {
   buildRunParamBadges,
@@ -70,9 +73,7 @@ type Derived = {
   runParamBadges: RunParamBadge[]
 }
 
-const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '1d'] as const
-type Timeframe = (typeof TIMEFRAMES)[number]
-type TimeframeFilter = Timeframe | 'all'
+type TimeframeFilter = TimeframeValue | 'all'
 type StringFilter = string | 'all'
 const UNNAMED_STRATEGY = '— Unnamed —'
 
@@ -221,12 +222,17 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     <div className="space-y-3">
       {/* ── Timeframe chips ─────────────────────────────────── */}
       <ChipRow label="Timeframe">
-        {(['all', ...TIMEFRAMES] as TimeframeFilter[]).map((tf) => (
+        <FilterChip
+          label="All"
+          active={timeframeFilter === 'all'}
+          onClick={() => setTimeframeFilter('all')}
+        />
+        {TIMEFRAME_OPTIONS.map((tf) => (
           <FilterChip
-            key={tf}
-            label={tf === 'all' ? 'All' : tf}
-            active={timeframeFilter === tf}
-            onClick={() => setTimeframeFilter(tf)}
+            key={tf.value}
+            label={tf.label}
+            active={timeframeFilter === tf.value}
+            onClick={() => setTimeframeFilter(tf.value)}
           />
         ))}
       </ChipRow>
@@ -387,7 +393,7 @@ function BodyRow({ d }: { d: Derived }) {
           href={`/backtests/${row.id}`}
           className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono whitespace-nowrap"
         >
-          {row.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {row.timeframe ?? '—'}
+          {row.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {timeframeLabel(row.timeframe)}
         </Link>
       </td>
       <td className="px-3 py-2">

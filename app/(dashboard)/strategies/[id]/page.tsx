@@ -17,6 +17,7 @@ import {
   pickMetric,
   pnlClass,
   relativeTime,
+  timeframeLabel,
 } from '../../backtests/_components/format'
 
 type Strategy = {
@@ -301,7 +302,7 @@ function BacktestsList({ backtests }: { backtests: BacktestLite[] }) {
                     href={`/backtests/${b.id}`}
                     className="font-mono text-foreground/90 hover:text-foreground hover:underline underline-offset-2"
                   >
-                    {b.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {b.timeframe ?? '—'}
+                    {b.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {timeframeLabel(b.timeframe)}
                   </Link>
                 </td>
                 <td className="px-3 py-1.5 whitespace-nowrap font-mono text-muted-foreground tabular-nums">
