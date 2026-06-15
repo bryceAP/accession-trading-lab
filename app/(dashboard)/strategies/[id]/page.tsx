@@ -9,6 +9,8 @@ import { DeleteStrategy } from '../_components/delete-strategy'
 import { NotesThread, type Note } from '../_components/notes-thread'
 import {
   fmtDate,
+  fmtDateTimeWithSeconds,
+  fmtElapsed,
   fmtNumber,
   fmtPct,
   fmtUsd,
@@ -34,9 +36,12 @@ type Strategy = {
 
 type BacktestLite = {
   id: string
+  instrument: string | null
+  timeframe: string | null
   start_date: string | null
   end_date: string | null
   completed_at: string | null
+  duration_ms: number | null
   metrics: Record<string, unknown> | null
 }
 
@@ -90,7 +95,7 @@ export default async function StrategyDetailPage({
   // since the Python side may write either field.
   let backtestsQuery = supabase
     .from('backtests')
-    .select('id, start_date, end_date, completed_at, metrics')
+    .select('id, instrument, timeframe, start_date, end_date, completed_at, duration_ms, metrics')
 
   if (strategy.name) {
     backtestsQuery = backtestsQuery.or(`strategy_id.eq.${strategy.id},strategy_name.eq.${strategy.name}`)
@@ -273,12 +278,14 @@ function BacktestsList({ backtests }: { backtests: BacktestLite[] }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-border bg-muted/30 text-[10px] uppercase tracking-widest text-muted-foreground">
+            <th className="px-3 py-2 text-left font-semibold">Backtest</th>
             <th className="px-3 py-2 text-left font-semibold">Date range</th>
             <th className="px-3 py-2 text-right font-semibold">Total P&L</th>
             <th className="px-3 py-2 text-right font-semibold">Win rate</th>
             <th className="px-3 py-2 text-right font-semibold">Sharpe</th>
             <th className="px-3 py-2 text-right font-semibold">Trades</th>
-            <th className="px-3 py-2 text-right font-semibold">Completed</th>
+            <th className="px-3 py-2 text-right font-semibold">Duration</th>
+            <th className="px-3 py-2 text-right font-semibold">Ran at</th>
           </tr>
         </thead>
         <tbody>
@@ -287,16 +294,18 @@ function BacktestsList({ backtests }: { backtests: BacktestLite[] }) {
             const winRate = pickMetric(b.metrics, 'win_rate')
             const sharpe = pickMetric(b.metrics, 'sharpe')
             const trades = pickMetric(b.metrics, 'total_trades')
-            const completed = b.completed_at ? new Date(b.completed_at) : null
             return (
               <tr key={b.id} className="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
                 <td className="px-3 py-1.5 whitespace-nowrap">
                   <Link
                     href={`/backtests/${b.id}`}
-                    className="font-mono text-muted-foreground hover:text-foreground hover:underline underline-offset-2"
+                    className="font-mono text-foreground/90 hover:text-foreground hover:underline underline-offset-2"
                   >
-                    {fmtDate(b.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(b.end_date)}
+                    {b.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {b.timeframe ?? '—'}
                   </Link>
+                </td>
+                <td className="px-3 py-1.5 whitespace-nowrap font-mono text-muted-foreground tabular-nums">
+                  {fmtDate(b.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(b.end_date)}
                 </td>
                 <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', pnlClass(totalPnl))}>
                   {totalPnl == null ? '—' : fmtUsd(totalPnl, { signed: true })}
@@ -308,11 +317,20 @@ function BacktestsList({ backtests }: { backtests: BacktestLite[] }) {
                 <td className="px-3 py-1.5 text-right font-mono tabular-nums">
                   {trades == null ? '—' : Math.round(trades).toLocaleString('en-US')}
                 </td>
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                  {b.duration_ms != null ? (
+                    fmtElapsed(b.duration_ms)
+                  ) : b.completed_at == null ? (
+                    <span className="text-muted-foreground italic">Running…</span>
+                  ) : (
+                    '—'
+                  )}
+                </td>
                 <td
                   className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground whitespace-nowrap"
                   title={b.completed_at ?? undefined}
                 >
-                  {completed ? relativeTime(completed) : '—'}
+                  {fmtDateTimeWithSeconds(b.completed_at)}
                 </td>
               </tr>
             )

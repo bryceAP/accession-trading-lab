@@ -59,6 +59,31 @@ export function fmtDateTime(s: string | null | undefined): string {
   })
 }
 
+export function fmtDateTimeWithSeconds(s: string | null | undefined): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  if (Number.isNaN(d.getTime())) return s
+  const date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })
+  return `${date} · ${time}`
+}
+
+export function fmtElapsed(ms: number | null | undefined): string {
+  if (ms == null || Number.isNaN(ms) || ms < 0) return '—'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 3_600_000) {
+    const totalSec = Math.floor(ms / 1000)
+    const m = Math.floor(totalSec / 60)
+    const s = totalSec % 60
+    return `${m}m ${s}s`
+  }
+  const totalMin = Math.floor(ms / 60_000)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return `${h}h ${m}m`
+}
+
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || Number.isNaN(ms) || ms < 0) return '—'
   const s = Math.floor(ms / 1000)
