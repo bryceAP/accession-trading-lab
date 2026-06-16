@@ -16,7 +16,7 @@ export default async function BacktestsPage() {
     .from('backtests')
     .select(
       'id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, duration_ms, metrics, ' +
-        'net_pnl, max_drawdown, win_rate, sharpe, trades_count',
+        'net_pnl, gross_pnl, max_drawdown, win_rate, sharpe, trades_count',
     )
     .order('completed_at', { ascending: false })
 

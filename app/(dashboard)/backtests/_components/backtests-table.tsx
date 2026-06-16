@@ -40,6 +40,7 @@ export type BacktestRow = {
   // doesn't have to download equity_curve jsonb or HEAD-count trades per row.
   // Older rows where the runner hasn't backfilled fall through to metrics.
   net_pnl: number | null
+  gross_pnl: number | null
   max_drawdown: number | null
   win_rate: number | null
   sharpe: number | null
@@ -86,7 +87,7 @@ function derive(row: BacktestRow): Derived {
   return {
     row,
     total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
-    gross_pnl:                         pickMetric(row.metrics, 'gross_pnl'),
+    gross_pnl:    row.gross_pnl     ?? pickMetric(row.metrics, 'gross_pnl'),
     win_rate:     row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
     sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
     max_drawdown: row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
