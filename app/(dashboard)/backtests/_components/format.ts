@@ -148,7 +148,9 @@ const METRIC_KEYS = {
     'sharpe', 'sharpe_ratio',
   ],
   max_drawdown: [
-    'max_drawdown', 'max_dd', 'mdd',
+    'Max Drawdown', 'Maximum Drawdown', 'Returns Max Drawdown',
+    'Max Drawdown (Pct)', 'Max Drawdown (%)', 'Drawdown',
+    'max_drawdown', 'max_dd', 'mdd', 'drawdown',
   ],
   total_trades: [
     'Total Positions', 'Positions', 'Position Count',
