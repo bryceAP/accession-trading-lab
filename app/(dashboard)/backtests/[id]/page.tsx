@@ -341,31 +341,6 @@ export default async function BacktestDetailPage({
         )}
       </section>
 
-      {/* ── Equity curve (hero) ───────────────────────────────── */}
-      <section className="rounded border border-border bg-card p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Equity curve
-          </h2>
-          <span className="text-[10px] text-muted-foreground font-mono">
-            {equityCurve.length.toLocaleString()}
-            {equityDownsampled && ` of ${fullEquityCurve.length.toLocaleString()}`} pts
-            {' · '}
-            {tradeMarkers.length.toLocaleString()}
-            {markersDownsampled && ` of ${allMarkers.length.toLocaleString()}`} marker{tradeMarkers.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <EquityChart curve={equityCurve} trades={tradeMarkers} />
-      </section>
-
-      {/* ── Drawdown ──────────────────────────────────────────── */}
-      <section className="rounded border border-border bg-card p-4 space-y-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Drawdown
-        </h2>
-        <DrawdownChart curve={equityCurve} />
-      </section>
-
       {/* ── Trading costs ─────────────────────────────────────── */}
       {trades.length > 0 && (
         <section className="rounded border border-border bg-card p-4 space-y-3">
@@ -416,6 +391,31 @@ export default async function BacktestDetailPage({
           </div>
         </section>
       )}
+
+      {/* ── Equity curve (hero) ───────────────────────────────── */}
+      <section className="rounded border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Equity curve
+          </h2>
+          <span className="text-[10px] text-muted-foreground font-mono">
+            {equityCurve.length.toLocaleString()}
+            {equityDownsampled && ` of ${fullEquityCurve.length.toLocaleString()}`} pts
+            {' · '}
+            {tradeMarkers.length.toLocaleString()}
+            {markersDownsampled && ` of ${allMarkers.length.toLocaleString()}`} marker{tradeMarkers.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <EquityChart curve={equityCurve} trades={tradeMarkers} />
+      </section>
+
+      {/* ── Drawdown ──────────────────────────────────────────── */}
+      <section className="rounded border border-border bg-card p-4 space-y-3">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Drawdown
+        </h2>
+        <DrawdownChart curve={equityCurve} />
+      </section>
 
       {/* ── Price chart placeholder ───────────────────────────── */}
       <section className="rounded border border-border border-dashed bg-card/50 p-6 text-center">
