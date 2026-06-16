@@ -7,6 +7,8 @@ import { DrawdownChart } from '../_components/drawdown-chart'
 import { NotesThread, type Note } from '../_components/notes-thread'
 import { TradesTable, type Trade } from '../_components/trades-table'
 import { ExitReasonBadge, EXIT_REASON_ORDER } from '../_components/exit-reason'
+import { DeleteBacktest } from '../_components/delete-backtest'
+import { timeframeLabel } from '../_components/format'
 import {
   asNumber,
   fmtDate,
@@ -460,6 +462,20 @@ export default async function BacktestDetailPage({
             All summary panels above include the full set.
           </div>
         )}
+      </section>
+
+      {/* ── Controls ──────────────────────────────────────────── */}
+      <section className="rounded border border-border bg-card p-4 space-y-3">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Controls
+        </h2>
+        <div className="flex flex-wrap items-center gap-3 justify-end">
+          <DeleteBacktest
+            backtestId={params.id}
+            backtestLabel={`${backtest.strategy_name ?? 'Untitled strategy'} · ${timeframeLabel(backtest.timeframe)}`}
+            tradeCount={trades.length}
+          />
+        </div>
       </section>
 
       {/* ── Notes ─────────────────────────────────────────────── */}
