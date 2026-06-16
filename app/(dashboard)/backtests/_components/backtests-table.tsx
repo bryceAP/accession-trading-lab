@@ -50,6 +50,7 @@ type SortKey =
   | 'instrument'
   | 'start_date'
   | 'total_pnl'
+  | 'gross_pnl'
   | 'win_rate'
   | 'sharpe'
   | 'max_drawdown'
@@ -62,6 +63,7 @@ type SortDir = 'asc' | 'desc'
 type Derived = {
   row: BacktestRow
   total_pnl: number | null
+  gross_pnl: number | null
   win_rate: number | null
   sharpe: number | null
   max_drawdown: number | null
@@ -84,6 +86,7 @@ function derive(row: BacktestRow): Derived {
   return {
     row,
     total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
+    gross_pnl:                         pickMetric(row.metrics, 'gross_pnl'),
     win_rate:     row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
     sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
     max_drawdown: row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
@@ -109,6 +112,7 @@ function getSortValue(d: Derived, key: SortKey): unknown {
     case 'start_date': return d.row.start_date
     case 'completed_at': return d.row.completed_at
     case 'total_pnl': return d.total_pnl
+    case 'gross_pnl': return d.gross_pnl
     case 'win_rate': return d.win_rate
     case 'sharpe': return d.sharpe
     case 'max_drawdown': return d.max_drawdown
@@ -193,6 +197,7 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
       // Numeric and date columns default to descending; string columns to ascending.
       const numericOrDate: SortKey[] = [
         'total_pnl',
+        'gross_pnl',
         'win_rate',
         'sharpe',
         'max_drawdown',
@@ -364,6 +369,7 @@ function StrategySection({
               <Th label="Backtest"   k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
               <Th label="Date range" k="start_date"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
               <Th label="Total P&L"  k="total_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Gross P&L"  k="gross_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Win rate"   k="win_rate"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"     k="sharpe"         sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"     k="max_drawdown"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
@@ -408,6 +414,9 @@ function BodyRow({ d }: { d: Derived }) {
       </td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.total_pnl))}>
         {d.total_pnl == null ? '—' : fmtUsd(d.total_pnl, { signed: true })}
+      </td>
+      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.gross_pnl))}>
+        {d.gross_pnl == null ? '—' : fmtUsd(d.gross_pnl, { signed: true })}
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPct(d.win_rate)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{d.sharpe == null ? '—' : fmtNumber(d.sharpe, 2)}</td>

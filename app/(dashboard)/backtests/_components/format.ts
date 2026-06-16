@@ -163,6 +163,10 @@ const METRIC_KEYS = {
     'Profit Factor',
     'profit_factor', 'pf',
   ],
+  gross_pnl: [
+    'PnL (gross)', 'Gross P&L', 'Gross PnL', 'Gross Profit',
+    'gross_pnl', 'gross', 'gross_profit',
+  ],
 } as const
 
 export function pickMetric(
