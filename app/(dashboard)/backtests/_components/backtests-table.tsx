@@ -86,7 +86,7 @@ function derive(row: BacktestRow): Derived {
     total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
     win_rate:     row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
     sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
-    max_drawdown: row.max_drawdown,
+    max_drawdown: row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
     total_trades: row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
     runParams,
     runParamBadges: buildRunParamBadges(runParams),
