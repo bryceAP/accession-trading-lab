@@ -332,22 +332,18 @@ export function BacktestsTable({
     return Array.from(map.entries())
   }, [sorted])
 
-  // "Recent runs" — anything completed in the past 24h, pulled from the
-  // post-filter view so toggling filters scopes it sensibly but kept
-  // independent of the grouped section's collapsed state. Sorted newest first.
+  // "Recent runs" — the 10 most-recently-completed backtests, pulled from the
+  // post-filter view so toggling filters scopes it sensibly. Sorted newest
+  // first regardless of the active sort column so this section always means
+  // "what did I just finish running".
   const recentRuns = useMemo(() => {
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000
-    const out = filtered.filter((d) => {
-      if (!d.row.completed_at) return false
-      const t = new Date(d.row.completed_at).getTime()
-      return Number.isFinite(t) && t >= cutoff
-    })
-    out.sort((a, b) => {
+    const completed = filtered.filter((d) => d.row.completed_at)
+    completed.sort((a, b) => {
       const ta = a.row.completed_at ? new Date(a.row.completed_at).getTime() : 0
       const tb = b.row.completed_at ? new Date(b.row.completed_at).getTime() : 0
       return tb - ta
     })
-    return out
+    return completed.slice(0, 10)
   }, [filtered])
 
   function toggleSet(key: 'strategies' | 'timeframes', value: string) {
@@ -612,7 +608,7 @@ function RecentRunsSection({
             Recent runs
           </span>
           <span className="text-[10px] text-muted-foreground font-mono">
-            past 24h
+            last 10
           </span>
         </span>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
