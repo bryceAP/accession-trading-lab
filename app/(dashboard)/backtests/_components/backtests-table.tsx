@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronsUpDown,
+  Clock,
   GitCompare,
   X,
 } from 'lucide-react'
@@ -36,6 +37,7 @@ import {
 import { StrategyLabel } from '@/components/strategy-label'
 import { strategyLabel, type StrategyNameInfo } from '@/lib/strategy-names'
 import { strategyColor } from '@/lib/strategy-color'
+import { BacktestInlineActions } from './delete-backtest'
 
 export type BacktestRow = {
   id: string
@@ -325,6 +327,24 @@ export function BacktestsTable({
     return Array.from(map.entries())
   }, [sorted])
 
+  // "Recent runs" — anything completed in the past 24h, pulled from the
+  // post-filter view so toggling filters scopes it sensibly but kept
+  // independent of the grouped section's collapsed state. Sorted newest first.
+  const recentRuns = useMemo(() => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000
+    const out = filtered.filter((d) => {
+      if (!d.row.completed_at) return false
+      const t = new Date(d.row.completed_at).getTime()
+      return Number.isFinite(t) && t >= cutoff
+    })
+    out.sort((a, b) => {
+      const ta = a.row.completed_at ? new Date(a.row.completed_at).getTime() : 0
+      const tb = b.row.completed_at ? new Date(b.row.completed_at).getTime() : 0
+      return tb - ta
+    })
+    return out
+  }, [filtered])
+
   function toggleSet(key: 'strategies' | 'timeframes', value: string) {
     const cur = new Set(key === 'strategies' ? q.strategies : q.timeframes)
     if (cur.has(value)) cur.delete(value)
@@ -463,6 +483,20 @@ export function BacktestsTable({
         </div>
       </div>
 
+      {/* ── Recent runs (past 24h) ──────────────────────────── */}
+      {recentRuns.length > 0 && (
+        <RecentRunsSection
+          items={recentRuns}
+          sortKey={q.sortKey}
+          sortDir={q.sortDir}
+          onSort={setSort}
+          selected={selected}
+          onToggleSelected={toggleSelected}
+          selectionFull={selected.size >= MAX_COMPARE}
+          resolveStrategy={resolveStrategy}
+        />
+      )}
+
       {/* ── Grouped sections ────────────────────────────────── */}
       {grouped.length === 0 ? (
         <div className="rounded border border-border bg-card px-3 py-6 text-center text-xs text-muted-foreground">
@@ -526,6 +560,91 @@ export function BacktestsTable({
   )
 }
 
+// Flat-list view of the most-recent runs (past 24h), rendered above the
+// per-strategy grouped sections. Reuses the same BodyRow + Th components so
+// rows render exactly like inside a strategy section (badges, inline actions,
+// sortable columns) — Bryce gets one place to see "what just finished" while
+// the strategy index below stays collapsed by default.
+function RecentRunsSection({
+  items,
+  sortKey,
+  sortDir,
+  onSort,
+  selected,
+  onToggleSelected,
+  selectionFull,
+  resolveStrategy,
+}: {
+  items: Derived[]
+  sortKey: SortKey
+  sortDir: SortDir
+  onSort: (k: SortKey) => void
+  selected: Set<string>
+  onToggleSelected: (id: string) => void
+  selectionFull: boolean
+  resolveStrategy: (id: string | null, name: string | null) => StrategyNameInfo | null
+}) {
+  return (
+    <section className="rounded border border-foreground/20 bg-card overflow-hidden">
+      <div className="flex items-center justify-between bg-foreground/[0.04] border-b border-border px-3 py-2">
+        <span className="inline-flex items-center gap-2">
+          <Clock className="h-3 w-3 text-foreground/70" />
+          <span className="text-xs font-semibold tracking-tight text-foreground">
+            Recent runs
+          </span>
+          <span className="text-[10px] text-muted-foreground font-mono">
+            past 24h
+          </span>
+        </span>
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+          {items.length} {items.length === 1 ? 'backtest' : 'backtests'}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border bg-muted/10">
+              <th className="w-8 px-2 py-2" aria-label="Select" />
+              <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Strategy · Backtest
+              </th>
+              <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Date range
+              </th>
+              <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Win rate
+              </th>
+              <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Duration
+              </th>
+              <Th label="Ran at"   k="completed_at"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground w-[80px]">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((d) => (
+              <BodyRow
+                key={d.row.id}
+                d={d}
+                selected={selected.has(d.row.id)}
+                disabled={!selected.has(d.row.id) && selectionFull}
+                onToggleSelected={onToggleSelected}
+                strategyInfo={resolveStrategy(d.row.strategy_id, d.row.strategy_name)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 function StrategySection({
   strategy,
   info,
@@ -547,7 +666,10 @@ function StrategySection({
   onToggleSelected: (id: string) => void
   selectionFull: boolean
 }) {
-  const [collapsed, setCollapsed] = useState(false)
+  // Default-collapsed so the page opens as a clean strategy index rather than
+  // a wall of rows. Bryce expands the strategy he wants to dig into; the
+  // "Recent runs" section above keeps the just-finished runs visible at a glance.
+  const [collapsed, setCollapsed] = useState(true)
   const Chevron = collapsed ? ChevronRight : ChevronDown
   const stratNameForColor = info?.name ?? strategy
   const primary = strategyLabel(info, strategy)
@@ -608,6 +730,9 @@ function StrategySection({
                 Duration
               </th>
               <Th label="Ran at"   k="completed_at"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-2 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground w-[80px]">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -633,11 +758,16 @@ function BodyRow({
   selected,
   disabled,
   onToggleSelected,
+  strategyInfo,
 }: {
   d: Derived
   selected: boolean
   disabled: boolean
   onToggleSelected: (id: string) => void
+  // When set, render a small strategy label/dot above the backtest label.
+  // The grouped strategy sections suppress this (they already render the
+  // strategy in their header); the flat "Recent runs" table opts in.
+  strategyInfo?: StrategyNameInfo | null
 }) {
   const { row } = d
   return (
@@ -665,6 +795,17 @@ function BodyRow({
         </button>
       </td>
       <td className="px-3 py-2">
+        {strategyInfo !== undefined && (
+          <div className="mb-1">
+            <StrategyLabel
+              info={strategyInfo}
+              fallback={row.strategy_name}
+              dotSize={8}
+              className="text-[11px] text-muted-foreground"
+              truncate={false}
+            />
+          </div>
+        )}
         <Link
           href={`/backtests/${row.id}`}
           className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono whitespace-nowrap"
@@ -710,6 +851,13 @@ function BodyRow({
         title={row.completed_at ?? undefined}
       >
         {fmtDateTimeWithSeconds(row.completed_at)}
+      </td>
+      <td className="px-2 py-2 text-right whitespace-nowrap">
+        <BacktestInlineActions
+          backtestId={row.id}
+          backtestLabel={row.label?.trim() || `${row.strategy_name ?? 'Untitled'} · ${row.timeframe ?? '—'}`}
+          archivedAt={row.archived_at}
+        />
       </td>
     </tr>
   )

@@ -10,6 +10,114 @@ import {
   unarchiveBacktest,
 } from './actions'
 
+// Icon-only variant used inline on the backtests list so Bryce can archive /
+// delete a row without clicking into its detail page. Reuses the same dialog
+// components as the full-width detail-page action panel.
+export function BacktestInlineActions({
+  backtestId,
+  backtestLabel,
+  archivedAt,
+}: {
+  backtestId: string
+  backtestLabel: string
+  archivedAt: string | null
+}) {
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [pending, startTransition] = useTransition()
+
+  function unarchive(e: React.MouseEvent) {
+    e.stopPropagation()
+    startTransition(async () => {
+      await unarchiveBacktest(backtestId)
+    })
+  }
+
+  return (
+    <div className="inline-flex items-center gap-1">
+      {archivedAt ? (
+        <IconButton
+          label="Restore"
+          onClick={unarchive}
+          disabled={pending}
+          tone="default"
+        >
+          <ArchiveRestore className="h-3.5 w-3.5" />
+        </IconButton>
+      ) : (
+        <IconButton
+          label="Archive"
+          onClick={(e) => {
+            e.stopPropagation()
+            setArchiveOpen(true)
+          }}
+          tone="default"
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </IconButton>
+      )}
+      <IconButton
+        label="Delete permanently"
+        onClick={(e) => {
+          e.stopPropagation()
+          setDeleteOpen(true)
+        }}
+        tone="danger"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </IconButton>
+
+      {archiveOpen && (
+        <ArchiveDialog
+          backtestId={backtestId}
+          backtestLabel={backtestLabel}
+          onClose={() => setArchiveOpen(false)}
+        />
+      )}
+      {deleteOpen && (
+        <DeleteDialog
+          backtestId={backtestId}
+          backtestLabel={backtestLabel}
+          onClose={() => setDeleteOpen(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled,
+  tone,
+  children,
+}: {
+  label: string
+  onClick: (e: React.MouseEvent) => void
+  disabled?: boolean
+  tone: 'default' | 'danger'
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded border transition-colors',
+        tone === 'danger'
+          ? 'border-border bg-card text-muted-foreground hover:border-[var(--negative)]/40 hover:bg-[var(--negative)]/10 hover:text-[var(--negative)]'
+          : 'border-border bg-card text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+        disabled && 'opacity-50 cursor-not-allowed',
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 export function BacktestRowActions({
   backtestId,
   backtestLabel,
