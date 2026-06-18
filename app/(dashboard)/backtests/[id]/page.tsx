@@ -649,9 +649,12 @@ function addToAgg(agg: SideAgg, t: Trade): void {
   // Treat null commission/slippage as 0 so older trades don't poison the total.
   const net = (t.pnl ?? 0) - (t.commission ?? 0) - (t.slippage ?? 0)
   agg.netPnl += net
+  // Win/loss is decided on NET PnL — matches the runner's own [exit-reason
+  // BREAKDOWN] log, which counts wins when (gross − commission − slippage) > 0.
+  // Using gross here would silently over-count wins on tight-margin strategies.
   if (t.pnl != null) {
     agg.withPnl += 1
-    if (t.pnl > 0) agg.wins += 1
+    if (net > 0) agg.wins += 1
   }
 }
 

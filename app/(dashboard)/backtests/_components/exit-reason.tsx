@@ -1,10 +1,22 @@
 import { cn } from '@/lib/utils'
 
-export const EXIT_REASON_ORDER = ['target', 'hard_stop', 'structural_stop', 'force_flat', 'other'] as const
+// Canonical order matches the runner's [exit-reason BREAKDOWN] log so the
+// dashboard and the terminal output read identically. Any reason the runner
+// emits that's missing here would still render — under "unknowns" sorted
+// alphabetically — but with the raw key as label and neutral coloring.
+export const EXIT_REASON_ORDER = [
+  'target',
+  'hard_stop',
+  'breakeven_stop',
+  'structural_stop',
+  'force_flat',
+  'other',
+] as const
 
 export const EXIT_REASON_LABEL: Record<string, string> = {
   target: 'Target',
   hard_stop: 'Hard stop',
+  breakeven_stop: 'Breakeven stop',
   structural_stop: 'Structural stop',
   force_flat: 'Force flat',
   other: 'Other',
