@@ -584,10 +584,24 @@ function RecentRunsSection({
   selectionFull: boolean
   resolveStrategy: (id: string | null, name: string | null) => StrategyNameInfo | null
 }) {
+  // Default open — this is the headline section and Bryce will usually want
+  // to see the just-finished runs. He can collapse if he wants to scan the
+  // strategy index below without the visual weight on top.
+  const [collapsed, setCollapsed] = useState(false)
+  const Chevron = collapsed ? ChevronRight : ChevronDown
   return (
     <section className="rounded border border-foreground/20 bg-card overflow-hidden">
-      <div className="flex items-center justify-between bg-foreground/[0.04] border-b border-border px-3 py-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        className={cn(
+          'w-full flex items-center justify-between bg-foreground/[0.04] px-3 py-2 text-left cursor-pointer hover:bg-foreground/[0.07] transition-colors',
+          !collapsed && 'border-b border-border',
+        )}
+      >
         <span className="inline-flex items-center gap-2">
+          <Chevron className="h-3 w-3 text-muted-foreground shrink-0" />
           <Clock className="h-3 w-3 text-foreground/70" />
           <span className="text-xs font-semibold tracking-tight text-foreground">
             Recent runs
@@ -599,7 +613,8 @@ function RecentRunsSection({
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
           {items.length} {items.length === 1 ? 'backtest' : 'backtests'}
         </span>
-      </div>
+      </button>
+      {!collapsed && (
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
@@ -641,6 +656,7 @@ function RecentRunsSection({
           </tbody>
         </table>
       </div>
+      )}
     </section>
   )
 }
