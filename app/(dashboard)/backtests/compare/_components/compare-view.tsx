@@ -655,18 +655,12 @@ function valueFor(run: CompareBacktest, key: string): number | null {
     case 'net_pnl':           return run.net_pnl       ?? pickMetric(run.metrics, 'total_pnl')
     case 'win_rate':          return run.win_rate      ?? pickMetric(run.metrics, 'win_rate')
     case 'sharpe':            return run.sharpe        ?? pickMetric(run.metrics, 'sharpe')
-    case 'max_drawdown_usd':  return run.max_drawdown
-    case 'max_drawdown': {
-      // Express max drawdown as a percentage of the run's starting equity.
-      // We don't have direct starting equity on the row, but the runner
-      // sometimes writes one into metrics; fall back to a $100k baseline so
-      // the column always renders a comparable number across runs.
-      const dd = run.max_drawdown
-      if (dd == null) return null
-      const baseline =
-        metricNumber(run.metrics, ['starting_equity', 'starting_capital', 'initial_capital']) ?? 100_000
-      return baseline > 0 ? (dd / baseline) * 100 : null
-    }
+    // USD magnitude: prefer metrics.max_drawdown_usd; the typed column on
+    // older rows holds the percentage, which would render as `−$14.00`.
+    case 'max_drawdown_usd':  return pickMetric(run.metrics, 'max_drawdown') ?? run.max_drawdown
+    // Percentage of starting equity: prefer the runner-supplied
+    // max_drawdown_pct over recomputing from a derived baseline.
+    case 'max_drawdown':      return pickMetric(run.metrics, 'max_drawdown_pct')
     case 'profit_factor':     return run.profit_factor ?? pickMetric(run.metrics, 'profit_factor')
     case 'trades_count':      return run.trades_count  ?? pickMetric(run.metrics, 'total_trades')
     case 'avg_trade':         return avgTrade(run)

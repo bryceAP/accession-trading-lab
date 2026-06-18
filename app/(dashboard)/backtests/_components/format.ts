@@ -147,10 +147,20 @@ const METRIC_KEYS = {
     'Sharpe Ratio',
     'sharpe', 'sharpe_ratio',
   ],
+  // USD magnitude. The runner writes max_drawdown_usd into metrics, so check
+  // that first. The bare 'max_drawdown' key is intentionally NOT a USD source
+  // — older runner versions stored the percentage under that name, which
+  // would render as `−$14.00` when displayed as dollars.
   max_drawdown: [
+    'max_drawdown_usd',
     'Max Drawdown', 'Maximum Drawdown', 'Returns Max Drawdown',
-    'Max Drawdown (Pct)', 'Max Drawdown (%)', 'Drawdown',
-    'max_drawdown', 'max_dd', 'mdd', 'drawdown',
+    'max_dd_usd', 'max_dd', 'mdd', 'drawdown',
+  ],
+  // Percentage of starting equity. Used by the compare view's "Max DD %" row.
+  max_drawdown_pct: [
+    'max_drawdown_pct',
+    'Max Drawdown (Pct)', 'Max Drawdown (%)',
+    'max_dd_pct',
   ],
   total_trades: [
     'Total Positions', 'Positions', 'Position Count',
@@ -264,10 +274,14 @@ export type MetricKind = 'pct' | 'usd' | 'ratio' | 'int' | 'num'
 export function metricKind(key: string): MetricKind {
   const k = key.toLowerCase()
   // Order matters: 'ratio' must beat 'rate' (substring), and explicit '%' wins
-  // over 'pnl' for keys like "PnL% (total)".
+  // over 'pnl' for keys like "PnL% (total)". Suffixes (_usd / _pct) are
+  // checked first because they're an explicit unit signal — they should not
+  // be overridden by a coincidental substring elsewhere in the key.
+  if (k.endsWith('_pct') || k.includes('%')) return 'pct'
+  if (k.endsWith('_usd')) return 'usd'
   if (k.includes('ratio') || k.includes('factor')) return 'ratio'
   if (k.includes('orders') || k.includes('positions')) return 'int'
-  if (k.includes('rate') || k.includes('return') || k.includes('%')) return 'pct'
+  if (k.includes('rate') || k.includes('return')) return 'pct'
   if (k.includes('pnl') || k.includes('winner') || k.includes('loser') || k.includes('expectancy')) return 'usd'
   return 'num'
 }

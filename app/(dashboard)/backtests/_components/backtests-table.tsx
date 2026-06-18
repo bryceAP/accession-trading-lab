@@ -108,13 +108,18 @@ function derive(row: BacktestRow): Derived {
     start_date: row.start_date,
     end_date: row.end_date,
   }
+  // max_drawdown wants USD magnitude. Older runner versions wrote the percent
+  // into the typed column, so we prefer metrics.max_drawdown_usd as the
+  // source of truth and only fall back to the column for rows that don't
+  // have the USD metric available.
+  const maxDdUsd = pickMetric(row.metrics, 'max_drawdown') ?? row.max_drawdown
   return {
     row,
     net_pnl:       row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
     gross_pnl:     row.gross_pnl     ?? pickMetric(row.metrics, 'gross_pnl'),
     win_rate:      row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
     sharpe:        row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
-    max_drawdown:  row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
+    max_drawdown:  maxDdUsd,
     trades_count:  row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
     configBadges:  buildConfigBadges(input),
     session:       sessionFacet(input),
