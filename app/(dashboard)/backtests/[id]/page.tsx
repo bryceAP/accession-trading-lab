@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { GitCompare } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -7,7 +8,7 @@ import { DrawdownChart } from '../_components/drawdown-chart'
 import { NotesThread, type Note } from '../_components/notes-thread'
 import { TradesTable, type Trade } from '../_components/trades-table'
 import { ExitReasonBadge, EXIT_REASON_ORDER } from '../_components/exit-reason'
-import { DeleteBacktest } from '../_components/delete-backtest'
+import { BacktestRowActions } from '../_components/delete-backtest'
 import { timeframeLabel } from '../_components/format'
 import {
   asNumber,
@@ -26,10 +27,13 @@ import {
   RUN_PARAMS_KEY,
   RunParamBadges,
 } from '../_components/run-params'
+import { buildConfigBadges, ConfigBadges } from '../_components/config-badges'
 
 type Backtest = {
   id: string
+  strategy_id: string | null
   strategy_name: string | null
+  label: string | null
   instrument: string | null
   timeframe: string | null
   start_date: string | null
@@ -37,9 +41,15 @@ type Backtest = {
   completed_at: string | null
   metrics: Record<string, unknown> | null
   equity_curve: unknown
+  config_snapshot: unknown
+  archived_at: string | null
   // Optional runner-populated aggregate; falls back to client compute when absent.
   exit_breakdown: unknown
 }
+
+// Cap matches the /backtests/compare flow (current + 5 = 6 max). If <5 siblings
+// exist we take what's available — don't pad with unrelated runs.
+const COMPARE_SIBLING_CAP = 5
 
 // Pagination + plot caps. Supabase caps a single .select() at ~1000 rows, so
 // summary panels were silently undercounting on high-frequency runs (1m cells
@@ -185,7 +195,7 @@ export default async function BacktestDetailPage({
   const [btRes, notesRes] = await Promise.all([
     supabase
       .from('backtests')
-      .select('id, strategy_name, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve, exit_breakdown')
+      .select('id, strategy_id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve, exit_breakdown, config_snapshot, archived_at')
       .eq('id', params.id)
       .maybeSingle(),
     supabase
@@ -221,6 +231,39 @@ export default async function BacktestDetailPage({
   // Pull ALL trades — Supabase caps a single select at ~1000 rows, so
   // summary panels were silently undercounting on high-frequency runs.
   const trades = await fetchAllTrades(supabase, params.id)
+
+  // "Compare similar" — the most-recent non-archived sibling backtests of the
+  // same strategy. Match on strategy_id first (preferred); fall back to
+  // strategy_name when strategy_id is null on either side. We exclude this
+  // backtest itself so the seeded URL has the current run first followed by
+  // its peers.
+  const siblingMatchedBy: 'strategy_id' | 'strategy_name' | 'none' =
+    backtest.strategy_id ? 'strategy_id' :
+    backtest.strategy_name ? 'strategy_name' : 'none'
+
+  let siblingIds: string[] = []
+  if (siblingMatchedBy !== 'none') {
+    let sibQuery = supabase
+      .from('backtests')
+      .select('id, completed_at')
+      .neq('id', params.id)
+      .is('archived_at', null)
+      .order('completed_at', { ascending: false, nullsFirst: false })
+      .limit(COMPARE_SIBLING_CAP)
+
+    if (siblingMatchedBy === 'strategy_id') {
+      sibQuery = sibQuery.eq('strategy_id', backtest.strategy_id!)
+    } else {
+      sibQuery = sibQuery.eq('strategy_name', backtest.strategy_name!)
+    }
+
+    const sibRes = await sibQuery
+    if (sibRes.error) {
+      console.error('[BacktestDetail siblings]', params.id, sibRes.error)
+    } else {
+      siblingIds = (sibRes.data ?? []).map((r) => r.id)
+    }
+  }
 
   // The curve and markers feed the chart only; downsample so 1m runs with
   // 50k+ points don't blow up render. Costs and breakdown still sum over the
@@ -277,12 +320,21 @@ export default async function BacktestDetailPage({
         </Link>
       </div>
 
+      {/* ── Archived banner ───────────────────────────────────── */}
+      {backtest.archived_at && (
+        <div className="rounded border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          This backtest is archived (hidden from the default list since{' '}
+          <span className="font-mono text-foreground/80">{new Date(backtest.archived_at).toLocaleDateString()}</span>
+          ). Use the controls below to restore or delete it.
+        </div>
+      )}
+
       {/* ── Header ────────────────────────────────────────────── */}
       <header className="rounded border border-border bg-card px-4 py-3 space-y-2">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
           <div className="space-y-1">
             <h1 className="text-sm font-semibold tracking-tight">
-              {backtest.strategy_name ?? params.id}
+              {backtest.label?.trim() || backtest.strategy_name || params.id}
             </h1>
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[11px] text-muted-foreground font-mono">
               <span>{backtest.instrument ?? '—'}</span>
@@ -294,21 +346,36 @@ export default async function BacktestDetailPage({
               </span>
             </div>
           </div>
-          <div className="text-right">
-            <div className="text-[10px] text-muted-foreground uppercase tracking-widest">Completed</div>
-            <div
-              className="text-xs font-mono tabular-nums"
-              title={backtest.completed_at ?? undefined}
-            >
-              {completed ? relativeTime(completed) : '—'}
-            </div>
-            {completed && (
-              <div className="text-[10px] text-muted-foreground font-mono">
-                {fmtDateTime(backtest.completed_at)}
+          <div className="flex items-start gap-3">
+            <CompareSimilarButton
+              currentId={params.id}
+              siblingIds={siblingIds}
+            />
+            <div className="text-right">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-widest">Completed</div>
+              <div
+                className="text-xs font-mono tabular-nums"
+                title={backtest.completed_at ?? undefined}
+              >
+                {completed ? relativeTime(completed) : '—'}
               </div>
-            )}
+              {completed && (
+                <div className="text-[10px] text-muted-foreground font-mono">
+                  {fmtDateTime(backtest.completed_at)}
+                </div>
+              )}
+            </div>
           </div>
         </div>
+        <ConfigBadges
+          badges={buildConfigBadges({
+            config_snapshot: backtest.config_snapshot,
+            label: backtest.label,
+            timeframe: backtest.timeframe,
+            start_date: backtest.start_date,
+            end_date: backtest.end_date,
+          })}
+        />
         {runParamBadges.length > 0 && (
           <RunParamBadges badges={runParamBadges} />
         )}
@@ -470,10 +537,10 @@ export default async function BacktestDetailPage({
           Controls
         </h2>
         <div className="flex flex-wrap items-center gap-3 justify-end">
-          <DeleteBacktest
+          <BacktestRowActions
             backtestId={params.id}
-            backtestLabel={`${backtest.strategy_name ?? 'Untitled strategy'} · ${timeframeLabel(backtest.timeframe)}`}
-            tradeCount={trades.length}
+            backtestLabel={backtest.label?.trim() || `${backtest.strategy_name ?? 'Untitled strategy'} · ${timeframeLabel(backtest.timeframe)}`}
+            archivedAt={backtest.archived_at}
           />
         </div>
       </section>
@@ -486,6 +553,51 @@ export default async function BacktestDetailPage({
         <NotesThread backtestId={params.id} notes={notes} />
       </section>
     </div>
+  )
+}
+
+function CompareSimilarButton({
+  currentId,
+  siblingIds,
+}: {
+  currentId: string
+  siblingIds: string[]
+}) {
+  const enabled = siblingIds.length > 0
+  // Current first so the compare modal treats it as the reference line.
+  const href = `/backtests/compare?ids=${[currentId, ...siblingIds].join(',')}`
+  const tooltip = enabled
+    ? `Compare this run with the ${siblingIds.length} most-recent sibling${siblingIds.length === 1 ? '' : 's'} of the same strategy.`
+    : 'No other completed backtests for this strategy.'
+  const sharedCls =
+    'inline-flex items-center gap-1.5 h-7 rounded border px-2.5 text-xs transition-colors'
+  if (!enabled) {
+    return (
+      <span
+        title={tooltip}
+        className={cn(sharedCls, 'border-border bg-card text-muted-foreground/70 cursor-not-allowed')}
+        aria-disabled="true"
+      >
+        <GitCompare className="h-3.5 w-3.5" />
+        Compare similar
+      </span>
+    )
+  }
+  return (
+    <Link
+      href={href}
+      title={tooltip}
+      className={cn(
+        sharedCls,
+        'border-foreground/30 bg-foreground/10 text-foreground hover:bg-foreground/20',
+      )}
+    >
+      <GitCompare className="h-3.5 w-3.5" />
+      Compare similar
+      <span className="font-mono tabular-nums text-muted-foreground">
+        ({siblingIds.length})
+      </span>
+    </Link>
   )
 }
 

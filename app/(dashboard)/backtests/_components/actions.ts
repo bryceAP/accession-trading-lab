@@ -4,6 +4,68 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
+// Soft-delete: flips archived_at to now() so the row is hidden from default
+// list queries but still recoverable via the "Show archived" toggle. Trade
+// rows + notes stay attached and intact.
+export async function archiveBacktest(backtestId: string) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'unauthorized' as const }
+
+  const { error } = await supabase
+    .from('backtests')
+    .update({ archived_at: new Date().toISOString() })
+    .eq('id', backtestId)
+
+  if (error) {
+    console.error('[archiveBacktest]', error)
+    return { ok: false, error: 'update_failed' as const }
+  }
+
+  revalidatePath('/backtests')
+  revalidatePath(`/backtests/${backtestId}`)
+  revalidatePath('/strategies')
+  return { ok: true as const }
+}
+
+export async function unarchiveBacktest(backtestId: string) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'unauthorized' as const }
+
+  const { error } = await supabase
+    .from('backtests')
+    .update({ archived_at: null })
+    .eq('id', backtestId)
+
+  if (error) {
+    console.error('[unarchiveBacktest]', error)
+    return { ok: false, error: 'update_failed' as const }
+  }
+
+  revalidatePath('/backtests')
+  revalidatePath(`/backtests/${backtestId}`)
+  revalidatePath('/strategies')
+  return { ok: true as const }
+}
+
+export async function getBacktestDeletePreview(backtestId: string) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'unauthorized' as const }
+
+  const tradeRes = await supabase
+    .from('trades')
+    .select('id', { count: 'exact', head: true })
+    .eq('backtest_id', backtestId)
+  if (tradeRes.error) {
+    console.error('[getBacktestDeletePreview]', tradeRes.error)
+    return { ok: false, error: 'preview_failed' as const }
+  }
+
+  return { ok: true as const, trades: tradeRes.count ?? 0 }
+}
+
 export async function deleteBacktest(backtestId: string) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
