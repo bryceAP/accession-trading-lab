@@ -5,8 +5,13 @@ import { cn } from '@/lib/utils'
 import { CodeBlock } from '../_components/code-block'
 import { StatusBadge } from '../_components/status-badge'
 import { StatusControl } from '../_components/status-control'
-import { DeleteStrategy } from '../_components/delete-strategy'
+import { StrategyRowActions } from '../_components/delete-strategy'
+import { DisplayNameEditor } from '../_components/display-name-editor'
 import { NotesThread, type Note } from '../_components/notes-thread'
+import { buildConfigBadges, ConfigBadges } from '../../backtests/_components/config-badges'
+import { StrategyDot } from '@/components/strategy-label'
+import { strategyColor } from '@/lib/strategy-color'
+import { strategyLabel } from '@/lib/strategy-names'
 import {
   fmtDate,
   fmtDateTimeWithSeconds,
@@ -23,6 +28,7 @@ import {
 type Strategy = {
   id: string
   name: string | null
+  display_name: string | null
   version: string | null
   instrument: string | null
   description: string | null
@@ -33,10 +39,12 @@ type Strategy = {
   author: string | null
   created_at: string | null
   updated_at: string | null
+  archived_at: string | null
 }
 
 type BacktestLite = {
   id: string
+  label: string | null
   instrument: string | null
   timeframe: string | null
   start_date: string | null
@@ -44,6 +52,7 @@ type BacktestLite = {
   completed_at: string | null
   duration_ms: number | null
   metrics: Record<string, unknown> | null
+  config_snapshot: unknown
 }
 
 function paramValueToString(v: unknown): string {
@@ -68,7 +77,7 @@ export default async function StrategyDetailPage({
   // Fetch the strategy first; the backtests query depends on its name for fallback matching.
   const stratRes = await supabase
     .from('strategies')
-    .select('id, name, version, instrument, description, status, code_text, commit_hash, parameters, author, created_at, updated_at')
+    .select('id, name, display_name, version, instrument, description, status, code_text, commit_hash, parameters, author, created_at, updated_at, archived_at')
     .eq('id', params.id)
     .maybeSingle()
 
@@ -93,10 +102,13 @@ export default async function StrategyDetailPage({
   }
 
   // Backtests: match on strategy_id first; merge by strategy_name as a fallback
-  // since the Python side may write either field.
+  // since the Python side may write either field. Archived backtests are
+  // hidden from this list — toggle them on from /backtests if you need to
+  // find one.
   let backtestsQuery = supabase
     .from('backtests')
-    .select('id, instrument, timeframe, start_date, end_date, completed_at, duration_ms, metrics')
+    .select('id, label, instrument, timeframe, start_date, end_date, completed_at, duration_ms, metrics, config_snapshot')
+    .is('archived_at', null)
 
   if (strategy.name) {
     backtestsQuery = backtestsQuery.or(`strategy_id.eq.${strategy.id},strategy_name.eq.${strategy.name}`)
@@ -133,16 +145,43 @@ export default async function StrategyDetailPage({
         </Link>
       </div>
 
+      {/* ── Archived banner ───────────────────────────────────── */}
+      {strategy.archived_at && (
+        <div className="rounded border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+          This strategy is archived (hidden from the default list since{' '}
+          <span className="font-mono text-foreground/80">{new Date(strategy.archived_at).toLocaleDateString()}</span>
+          ). Use the controls below to restore it or delete it permanently.
+        </div>
+      )}
+
       {/* ── Header ────────────────────────────────────────────── */}
-      <header className="rounded border border-border bg-card px-4 py-3">
+      <header
+        className="rounded border border-l-4 border-border bg-card px-4 py-3"
+        style={{ borderLeftColor: strategyColor(strategy.name) }}
+      >
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
-          <div className="space-y-1">
-            <div className="flex items-baseline gap-2 flex-wrap">
-              <h1 className="text-sm font-semibold tracking-tight">{strategy.name ?? params.id}</h1>
+          <div className="space-y-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <StrategyDot name={strategy.name} size={10} />
+              <DisplayNameEditor
+                strategyId={strategy.id}
+                initialDisplayName={strategy.display_name}
+                fallbackName={strategy.name ?? params.id}
+              />
               {strategy.version && (
                 <span className="text-[11px] font-mono text-muted-foreground">v{strategy.version}</span>
               )}
+              {strategy.archived_at && (
+                <span className="inline-flex h-4 items-center rounded border border-border bg-muted/40 px-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+                  archived
+                </span>
+              )}
             </div>
+            {strategy.display_name && strategy.name && strategyLabel(strategy) !== strategy.name && (
+              <div className="text-[10px] font-mono text-muted-foreground truncate" title={strategy.name}>
+                {strategy.name}
+              </div>
+            )}
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[11px] text-muted-foreground font-mono">
               {strategy.instrument && (
                 <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5">{strategy.instrument}</span>
@@ -246,10 +285,10 @@ export default async function StrategyDetailPage({
         </h2>
         <div className="flex flex-wrap items-center gap-3 justify-between">
           <StatusControl strategyId={strategy.id} initial={strategy.status} />
-          <DeleteStrategy
+          <StrategyRowActions
             strategyId={strategy.id}
             strategyName={strategy.name ?? strategy.id}
-            backtestCount={backtests.length}
+            archivedAt={strategy.archived_at}
           />
         </div>
       </section>
@@ -305,8 +344,21 @@ function BacktestsList({ backtests }: { backtests: BacktestLite[] }) {
                     {b.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {timeframeLabel(b.timeframe)}
                   </Link>
                 </td>
-                <td className="px-3 py-1.5 whitespace-nowrap font-mono text-muted-foreground tabular-nums">
-                  {fmtDate(b.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(b.end_date)}
+                <td className="px-3 py-1.5 font-mono text-muted-foreground tabular-nums">
+                  <div className="flex flex-col gap-1">
+                    <span className="whitespace-nowrap">
+                      {fmtDate(b.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(b.end_date)}
+                    </span>
+                    <ConfigBadges
+                      badges={buildConfigBadges({
+                        config_snapshot: b.config_snapshot,
+                        label: b.label,
+                        timeframe: b.timeframe,
+                        start_date: b.start_date,
+                        end_date: b.end_date,
+                      })}
+                    />
+                  </div>
                 </td>
                 <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', pnlClass(totalPnl))}>
                   {totalPnl == null ? '—' : fmtUsd(totalPnl, { signed: true })}

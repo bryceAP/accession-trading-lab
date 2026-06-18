@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { fetchStrategyNameMap, type StrategyNameInfo } from '@/lib/strategy-names'
 import { CompareView, type CompareBacktest } from './_components/compare-view'
 
 export default async function BacktestsComparePage() {
@@ -10,13 +11,22 @@ export default async function BacktestsComparePage() {
   // equity_curve is intentionally NOT selected here — it's potentially huge
   // (1m runs produce 100k+ points) and the selector list never displays it.
   // CompareView fetches curves lazily for the runs the user actually picks.
-  const { data, error } = await supabase
-    .from('backtests')
-    .select(
-      'id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, ' +
-        'net_pnl, max_drawdown, win_rate, sharpe, profit_factor, trades_count',
-    )
-    .order('completed_at', { ascending: false })
+  // config_snapshot feeds the per-run badges and the config diff table.
+  const [{ data, error }, strategyMap] = await Promise.all([
+    supabase
+      .from('backtests')
+      .select(
+        'id, strategy_id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, config_snapshot, archived_at, ' +
+          'net_pnl, max_drawdown, win_rate, sharpe, profit_factor, trades_count',
+      )
+      .order('completed_at', { ascending: false }),
+    fetchStrategyNameMap(supabase),
+  ])
+
+  const strategyDirectory: Record<string, StrategyNameInfo> = {}
+  strategyMap.forEach((info, key) => {
+    strategyDirectory[key] = info
+  })
 
   if (error) console.error('[BacktestsCompare]', error)
 
@@ -50,7 +60,7 @@ export default async function BacktestsComparePage() {
       </div>
 
       <Suspense fallback={<div className="text-xs text-muted-foreground">Loading…</div>}>
-        <CompareView rows={rows} />
+        <CompareView rows={rows} strategyDirectory={strategyDirectory} />
       </Suspense>
     </div>
   )

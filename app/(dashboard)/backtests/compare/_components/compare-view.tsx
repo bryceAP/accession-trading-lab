@@ -24,9 +24,18 @@ import {
   pickMetric,
   pnlClass,
 } from '../../_components/format'
+import {
+  buildConfigBadges,
+  ConfigBadges,
+  parseConfigSnapshot,
+} from '../../_components/config-badges'
+import { strategyColor } from '@/lib/strategy-color'
+import { strategyLabel, type StrategyNameInfo } from '@/lib/strategy-names'
+import { StrategyDot } from '@/components/strategy-label'
 
 export type CompareBacktest = {
   id: string
+  strategy_id: string | null
   strategy_name: string | null
   label: string | null
   instrument: string | null
@@ -35,6 +44,8 @@ export type CompareBacktest = {
   end_date: string | null
   completed_at: string | null
   metrics: Record<string, unknown> | null
+  config_snapshot: unknown
+  archived_at: string | null
   net_pnl: number | null
   max_drawdown: number | null
   win_rate: number | null
@@ -45,14 +56,7 @@ export type CompareBacktest = {
 
 type CurveState = unknown | 'loading' | 'error'
 
-const MAX_SELECTION = 5
-const SERIES_COLORS = [
-  'var(--chart-1)',
-  'var(--chart-2)',
-  'var(--chart-3)',
-  'var(--chart-4)',
-  'var(--chart-5)',
-] as const
+const MAX_SELECTION = 6
 
 type NormalizedPoint = { ts: number; equity: number }
 
@@ -112,19 +116,22 @@ function buildSeries(
   runs: CompareBacktest[],
   curves: Map<string, CurveState>,
 ): Series[] {
-  return runs.map((r, i) => {
+  return runs.map((r) => {
+    // Deterministic per-strategy hue. Two runs of the same strategy share a
+    // color by design — the legend + tooltip disambiguate by label.
+    const color = strategyColor(r.strategy_name)
     const cached = curves.get(r.id)
     const raw = cached === 'loading' || cached === 'error' ? null : cached
     const curve = normalizeCurve(raw)
     if (curve.length === 0) {
-      return { id: r.id, name: runLabel(r), color: SERIES_COLORS[i % SERIES_COLORS.length], relative: [] }
+      return { id: r.id, name: runLabel(r), color, relative: [] }
     }
     const t0 = curve[0].ts
     const e0 = curve[0].equity
     return {
       id: r.id,
       name: runLabel(r),
-      color: SERIES_COLORS[i % SERIES_COLORS.length],
+      color,
       relative: curve.map((p) => ({ x: relativeDay(p, t0), y: p.equity - e0 })),
     }
   })
@@ -161,9 +168,25 @@ function fmtYAxis(v: number): string {
   return v.toFixed(0)
 }
 
-export function CompareView({ rows }: { rows: CompareBacktest[] }) {
+export function CompareView({
+  rows,
+  strategyDirectory,
+}: {
+  rows: CompareBacktest[]
+  strategyDirectory?: Record<string, StrategyNameInfo>
+}) {
   const router = useRouter()
   const searchParams = useSearchParams()
+
+  const resolveStrategy = useCallback(
+    (id: string | null, name: string | null): StrategyNameInfo | null => {
+      if (!strategyDirectory) return null
+      if (id && strategyDirectory[id]) return strategyDirectory[id]
+      if (name && strategyDirectory[name]) return strategyDirectory[name]
+      return null
+    },
+    [strategyDirectory],
+  )
 
   const allIds = useMemo(() => new Set(rows.map((r) => r.id)), [rows])
 
@@ -267,6 +290,7 @@ export function CompareView({ rows }: { rows: CompareBacktest[] }) {
         onClear={clear}
         selectedCount={selectedIds.length}
         atMax={atMax}
+        resolveStrategy={resolveStrategy}
       />
 
       {selectedRuns.length < 2 ? (
@@ -282,6 +306,7 @@ export function CompareView({ rows }: { rows: CompareBacktest[] }) {
         </div>
       ) : (
         <>
+          <RunsHeader runs={selectedRuns} series={series} resolveStrategy={resolveStrategy} />
           <OverlayChart
             series={series}
             mergedData={mergedData}
@@ -289,12 +314,15 @@ export function CompareView({ rows }: { rows: CompareBacktest[] }) {
             loadingCount={loadingIds.length}
             errorCount={errorIds.length}
           />
-          <MetricsTable runs={selectedRuns} series={series} />
+          <MetricsTable runs={selectedRuns} series={series} resolveStrategy={resolveStrategy} />
+          <ConfigDiffTable runs={selectedRuns} series={series} resolveStrategy={resolveStrategy} />
         </>
       )}
     </div>
   )
 }
+
+type StrategyResolver = (id: string | null, name: string | null) => StrategyNameInfo | null
 
 function Selector({
   rows,
@@ -303,6 +331,7 @@ function Selector({
   onClear,
   selectedCount,
   atMax,
+  resolveStrategy,
 }: {
   rows: CompareBacktest[]
   selectedSet: Set<string>
@@ -310,6 +339,7 @@ function Selector({
   onClear: () => void
   selectedCount: number
   atMax: boolean
+  resolveStrategy: StrategyResolver
 }) {
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
@@ -372,7 +402,10 @@ function Selector({
                       <TimeframeBadge value={r.timeframe} />
                     </div>
                     <div className="flex items-baseline gap-x-2 gap-y-0 text-[10px] text-muted-foreground font-mono tabular-nums whitespace-nowrap overflow-hidden">
-                      <span className="truncate">{r.strategy_name ?? '—'}</span>
+                      <span className="inline-flex items-center gap-1 truncate">
+                        <StrategyDot name={r.strategy_name} size={6} />
+                        <span className="truncate">{strategyLabel(resolveStrategy(r.strategy_id, r.strategy_name), r.strategy_name)}</span>
+                      </span>
                       <span className="text-muted-foreground/40">·</span>
                       <span>{r.instrument ?? '—'}</span>
                       <span className="text-muted-foreground/40">·</span>
@@ -387,6 +420,58 @@ function Selector({
           })}
         </ul>
       )}
+    </section>
+  )
+}
+
+function RunsHeader({
+  runs,
+  series,
+  resolveStrategy,
+}: {
+  runs: CompareBacktest[]
+  series: Series[]
+  resolveStrategy: StrategyResolver
+}) {
+  const colorById = new Map(series.map((s) => [s.id, s.color] as const))
+  return (
+    <section className="rounded border border-border bg-card overflow-hidden">
+      <header className="border-b border-border bg-muted/30 px-3 py-2">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Selected runs
+        </h2>
+      </header>
+      <ul className="divide-y divide-border">
+        {runs.map((r) => {
+          const badges = buildConfigBadges({
+            config_snapshot: r.config_snapshot,
+            label: r.label,
+            timeframe: r.timeframe,
+            start_date: r.start_date,
+            end_date: r.end_date,
+          })
+          const info = resolveStrategy(r.strategy_id, r.strategy_name)
+          const stratPrimary = strategyLabel(info, r.strategy_name)
+          return (
+            <li key={r.id} className="flex items-start gap-3 px-3 py-2.5">
+              <span
+                className="mt-1 h-2.5 w-2.5 shrink-0 rounded-sm"
+                style={{ background: colorById.get(r.id) ?? 'var(--chart-1)' }}
+              />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-foreground/90 truncate">{runLabel(r)}</span>
+                  <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground font-mono">
+                    <StrategyDot name={r.strategy_name} size={6} />
+                    <span title={r.strategy_name ?? undefined}>{stratPrimary}</span>
+                  </span>
+                </div>
+                <ConfigBadges badges={badges} />
+              </div>
+            </li>
+          )
+        })}
+      </ul>
     </section>
   )
 }
@@ -532,33 +617,88 @@ function OverlayLegend({ series }: { series: Series[] }) {
   )
 }
 
+type Direction = 'higher_better' | 'lower_better' | null
+
 type MetricSpec = {
   key: string
   label: string
   fmt: (v: number | null) => string
   colorize?: 'pnl' | 'negative'
+  direction: Direction
 }
 
 const METRIC_SPECS: MetricSpec[] = [
-  { key: 'total_pnl',     label: 'Net P&L',       fmt: (v) => (v == null ? '—' : fmtUsd(v, { signed: true })), colorize: 'pnl' },
-  { key: 'win_rate',      label: 'Win rate',      fmt: (v) => fmtPct(v) },
-  { key: 'sharpe',        label: 'Sharpe',        fmt: (v) => (v == null ? '—' : fmtNumber(v, 2)) },
-  { key: 'max_drawdown',  label: 'Max drawdown',  fmt: (v) => (v == null ? '—' : v === 0 ? fmtUsd(0) : `−${fmtUsd(v)}`), colorize: 'negative' },
-  { key: 'profit_factor', label: 'Profit factor', fmt: (v) => (v == null ? '—' : fmtNumber(v, 2)) },
-  { key: 'total_trades',  label: 'Trades',        fmt: (v) => fmtInt(v) },
+  { key: 'net_pnl',       label: 'Net P&L',       fmt: (v) => (v == null ? '—' : fmtUsd(v, { signed: true })),                   colorize: 'pnl',      direction: 'higher_better' },
+  { key: 'max_drawdown',  label: 'Max DD %',      fmt: (v) => (v == null ? '—' : v === 0 ? '0%' : fmtPct(v / 100)),               colorize: 'negative', direction: 'lower_better'  },
+  { key: 'max_drawdown_usd', label: 'Max DD ($)', fmt: (v) => (v == null ? '—' : v === 0 ? fmtUsd(0) : `−${fmtUsd(v)}`),          colorize: 'negative', direction: 'lower_better'  },
+  { key: 'win_rate',      label: 'Win rate',      fmt: (v) => fmtPct(v),                                                          direction: 'higher_better' },
+  { key: 'sharpe',        label: 'Sharpe',        fmt: (v) => (v == null ? '—' : fmtNumber(v, 2)),                                direction: 'higher_better' },
+  { key: 'profit_factor', label: 'Profit factor', fmt: (v) => (v == null ? '—' : fmtNumber(v, 2)),                                direction: 'higher_better' },
+  { key: 'trades_count',  label: 'Trade count',   fmt: (v) => fmtInt(v),                                                          direction: null },
+  { key: 'avg_trade',     label: 'Avg trade',     fmt: (v) => (v == null ? '—' : fmtUsd(v, { signed: true })),                    colorize: 'pnl',      direction: 'higher_better' },
+  { key: 'avg_win',       label: 'Avg win',       fmt: (v) => (v == null ? '—' : fmtUsd(v, { signed: true })),                    colorize: 'pnl',      direction: 'higher_better' },
+  { key: 'avg_loss',      label: 'Avg loss',      fmt: (v) => (v == null ? '—' : fmtUsd(v, { signed: true })),                    colorize: 'pnl',      direction: 'higher_better' },
 ]
 
+// Net P&L / trades_count → avg trade pnl. Computed here because the backtests
+// row doesn't store the average directly. Returns null when there aren't
+// enough trades to make the average meaningful.
+function avgTrade(run: CompareBacktest): number | null {
+  const net = run.net_pnl ?? pickMetric(run.metrics, 'total_pnl')
+  const n = run.trades_count ?? pickMetric(run.metrics, 'total_trades')
+  if (net == null || n == null || n <= 0) return null
+  return net / n
+}
+
 function valueFor(run: CompareBacktest, key: string): number | null {
-  // Prefer typed columns; fall back to metrics jsonb for older rows the runner
-  // hasn't backfilled yet. Max drawdown has no metric fallback — when the
-  // column is null the row predates the runner change and shows "—".
   switch (key) {
-    case 'total_pnl':     return run.net_pnl       ?? pickMetric(run.metrics, 'total_pnl')
-    case 'win_rate':      return run.win_rate      ?? pickMetric(run.metrics, 'win_rate')
-    case 'sharpe':        return run.sharpe        ?? pickMetric(run.metrics, 'sharpe')
-    case 'max_drawdown':  return run.max_drawdown
-    case 'profit_factor': return run.profit_factor ?? pickMetric(run.metrics, 'profit_factor')
-    case 'total_trades':  return run.trades_count  ?? pickMetric(run.metrics, 'total_trades')
+    case 'net_pnl':           return run.net_pnl       ?? pickMetric(run.metrics, 'total_pnl')
+    case 'win_rate':          return run.win_rate      ?? pickMetric(run.metrics, 'win_rate')
+    case 'sharpe':            return run.sharpe        ?? pickMetric(run.metrics, 'sharpe')
+    case 'max_drawdown_usd':  return run.max_drawdown
+    case 'max_drawdown': {
+      // Express max drawdown as a percentage of the run's starting equity.
+      // We don't have direct starting equity on the row, but the runner
+      // sometimes writes one into metrics; fall back to a $100k baseline so
+      // the column always renders a comparable number across runs.
+      const dd = run.max_drawdown
+      if (dd == null) return null
+      const baseline =
+        metricNumber(run.metrics, ['starting_equity', 'starting_capital', 'initial_capital']) ?? 100_000
+      return baseline > 0 ? (dd / baseline) * 100 : null
+    }
+    case 'profit_factor':     return run.profit_factor ?? pickMetric(run.metrics, 'profit_factor')
+    case 'trades_count':      return run.trades_count  ?? pickMetric(run.metrics, 'total_trades')
+    case 'avg_trade':         return avgTrade(run)
+    case 'avg_win':           return metricNumber(run.metrics, ['avg_win', 'Avg Winner', 'Average Winner', 'avg_winner'])
+    case 'avg_loss':          return metricNumber(run.metrics, ['avg_loss', 'Avg Loser', 'Average Loser', 'avg_loser'])
+  }
+  return null
+}
+
+function metricNumber(
+  metrics: Record<string, unknown> | null | undefined,
+  keys: string[],
+): number | null {
+  if (!metrics) return null
+  for (const k of keys) {
+    const v = metrics[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string') {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
+  }
+  // case-insensitive fallback
+  const lc = new Map<string, unknown>()
+  for (const [k, v] of Object.entries(metrics)) lc.set(k.toLowerCase(), v)
+  for (const k of keys) {
+    const v = lc.get(k.toLowerCase())
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string') {
+      const n = Number(v)
+      if (Number.isFinite(n)) return n
+    }
   }
   return null
 }
@@ -570,7 +710,31 @@ function colorClass(spec: MetricSpec, v: number | null): string {
   return ''
 }
 
-function MetricsTable({ runs, series }: { runs: CompareBacktest[]; series: Series[] }) {
+type Extremes = { best: number | null; worst: number | null }
+
+function findExtremes(spec: MetricSpec, runs: CompareBacktest[]): Extremes {
+  if (spec.direction == null) return { best: null, worst: null }
+  const vals = runs
+    .map((r) => valueFor(r, spec.key))
+    .filter((v): v is number => v != null && Number.isFinite(v))
+  if (vals.length < 2) return { best: null, worst: null }
+  const max = Math.max(...vals)
+  const min = Math.min(...vals)
+  if (max === min) return { best: null, worst: null }
+  return spec.direction === 'higher_better'
+    ? { best: max, worst: min }
+    : { best: min, worst: max }
+}
+
+function MetricsTable({
+  runs,
+  series,
+  resolveStrategy,
+}: {
+  runs: CompareBacktest[]
+  series: Series[]
+  resolveStrategy: StrategyResolver
+}) {
   const colorById = new Map(series.map((s) => [s.id, s.color] as const))
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
@@ -579,7 +743,7 @@ function MetricsTable({ runs, series }: { runs: CompareBacktest[]; series: Serie
           Metrics
         </h2>
         <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-          {runs.length} runs
+          {runs.length} runs · best / worst highlighted
         </span>
       </header>
       <div className="overflow-x-auto">
@@ -591,33 +755,45 @@ function MetricsTable({ runs, series }: { runs: CompareBacktest[]; series: Serie
               </th>
               {runs.map((r) => (
                 <th key={r.id} className="px-3 py-2 text-right align-top">
-                  <RunHeaderCell run={r} color={colorById.get(r.id) ?? 'var(--chart-1)'} />
+                  <RunHeaderCell
+                    run={r}
+                    color={colorById.get(r.id) ?? 'var(--chart-1)'}
+                    resolveStrategy={resolveStrategy}
+                  />
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {METRIC_SPECS.map((spec) => (
-              <tr key={spec.key} className="border-b border-border last:border-b-0">
-                <td className="px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">
-                  {spec.label}
-                </td>
-                {runs.map((r) => {
-                  const v = valueFor(r, spec.key)
-                  return (
-                    <td
-                      key={r.id}
-                      className={cn(
-                        'px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap',
-                        colorClass(spec, v),
-                      )}
-                    >
-                      {spec.fmt(v)}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
+            {METRIC_SPECS.map((spec) => {
+              const ex = findExtremes(spec, runs)
+              return (
+                <tr key={spec.key} className="border-b border-border last:border-b-0">
+                  <td className="px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground whitespace-nowrap">
+                    {spec.label}
+                  </td>
+                  {runs.map((r) => {
+                    const v = valueFor(r, spec.key)
+                    const isBest = ex.best != null && v === ex.best
+                    const isWorst = ex.worst != null && v === ex.worst
+                    return (
+                      <td
+                        key={r.id}
+                        className={cn(
+                          'px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap',
+                          colorClass(spec, v),
+                          isBest && 'bg-[var(--positive)]/10 ring-1 ring-inset ring-[var(--positive)]/30',
+                          isWorst && 'bg-[var(--negative)]/10 ring-1 ring-inset ring-[var(--negative)]/30',
+                        )}
+                        title={isBest ? 'best in row' : isWorst ? 'worst in row' : undefined}
+                      >
+                        {spec.fmt(v)}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -625,7 +801,17 @@ function MetricsTable({ runs, series }: { runs: CompareBacktest[]; series: Serie
   )
 }
 
-function RunHeaderCell({ run, color }: { run: CompareBacktest; color: string }) {
+function RunHeaderCell({
+  run,
+  color,
+  resolveStrategy,
+}: {
+  run: CompareBacktest
+  color: string
+  resolveStrategy: StrategyResolver
+}) {
+  const info = resolveStrategy(run.strategy_id, run.strategy_name)
+  const stratPrimary = strategyLabel(info, run.strategy_name)
   return (
     <div className="flex flex-col items-end gap-0.5">
       <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground/90">
@@ -633,7 +819,7 @@ function RunHeaderCell({ run, color }: { run: CompareBacktest; color: string }) 
         <span className="truncate max-w-[200px]">{runLabel(run)}</span>
       </div>
       <div className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground font-mono">
-        <span>{run.strategy_name ?? '—'}</span>
+        <span title={run.strategy_name ?? undefined}>{stratPrimary}</span>
         <TimeframeBadge value={run.timeframe} />
       </div>
     </div>
@@ -649,4 +835,153 @@ function TimeframeBadge({ value }: { value: string | null }) {
       {value}
     </span>
   )
+}
+
+// ── Config diff table ──────────────────────────────────────────────────────
+// Rows = every key the runs touch in their config_snapshot blobs. Identical-
+// across-all-runs rows are hidden by default behind a toggle so the user can
+// focus on what actually changed between cells.
+
+function ConfigDiffTable({
+  runs,
+  series,
+  resolveStrategy,
+}: {
+  runs: CompareBacktest[]
+  series: Series[]
+  resolveStrategy: StrategyResolver
+}) {
+  const [showIdentical, setShowIdentical] = useState(false)
+  const colorById = new Map(series.map((s) => [s.id, s.color] as const))
+
+  // Collect snapshot maps for each run + the union of keys.
+  const snapshots = useMemo(() => {
+    return runs.map((r) => {
+      const snap = parseConfigSnapshot(r.config_snapshot)
+      return snap ? (snap as Record<string, unknown>) : {}
+    })
+  }, [runs])
+
+  const allKeys = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of snapshots) for (const k of Object.keys(s)) set.add(k)
+    return Array.from(set).sort()
+  }, [snapshots])
+
+  type DiffRow = { key: string; values: (unknown)[]; identical: boolean }
+  const diffRows: DiffRow[] = useMemo(() => {
+    return allKeys.map((k) => {
+      const values = snapshots.map((s) => (k in s ? s[k] : undefined))
+      const ref = JSON.stringify(values[0] ?? null)
+      const identical = values.every((v) => JSON.stringify(v ?? null) === ref)
+      return { key: k, values, identical }
+    })
+  }, [allKeys, snapshots])
+
+  const diffOnlyCount = diffRows.filter((r) => !r.identical).length
+  const visibleRows = showIdentical ? diffRows : diffRows.filter((r) => !r.identical)
+
+  if (allKeys.length === 0) {
+    return (
+      <section className="rounded border border-border bg-card overflow-hidden">
+        <header className="flex items-baseline justify-between border-b border-border bg-muted/30 px-3 py-2">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Config diff
+          </h2>
+        </header>
+        <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+          None of the selected runs have a config_snapshot. Older rows may
+          predate the snapshot column — those can be backfilled on the
+          mes-algo side.
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded border border-border bg-card overflow-hidden">
+      <header className="flex items-baseline justify-between border-b border-border bg-muted/30 px-3 py-2">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Config diff
+        </h2>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+            {diffOnlyCount} of {diffRows.length} keys differ
+          </span>
+          <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showIdentical}
+              onChange={(e) => setShowIdentical(e.target.checked)}
+              className="h-3 w-3 accent-foreground"
+            />
+            Show identical configs
+          </label>
+        </div>
+      </header>
+      {visibleRows.length === 0 ? (
+        <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+          All config keys match across the selected runs.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground w-[200px]">
+                  Key
+                </th>
+                {runs.map((r) => (
+                  <th key={r.id} className="px-3 py-2 text-right align-top">
+                    <RunHeaderCell
+                      run={r}
+                      color={colorById.get(r.id) ?? 'var(--chart-1)'}
+                      resolveStrategy={resolveStrategy}
+                    />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRows.map((row) => (
+                <tr key={row.key} className={cn(
+                  'border-b border-border last:border-b-0',
+                  row.identical && 'opacity-60',
+                )}>
+                  <td className="px-3 py-1.5 text-[10px] font-mono text-muted-foreground whitespace-nowrap">
+                    {row.key}
+                  </td>
+                  {row.values.map((v, i) => (
+                    <td
+                      key={runs[i].id}
+                      className={cn(
+                        'px-3 py-1.5 text-right font-mono tabular-nums whitespace-nowrap break-all',
+                        !row.identical && 'text-foreground',
+                        row.identical && 'text-muted-foreground',
+                      )}
+                    >
+                      {formatConfigValue(v)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function formatConfigValue(v: unknown): string {
+  if (v === undefined) return '—'
+  if (v === null) return 'null'
+  if (typeof v === 'string') return v
+  if (typeof v === 'number') return Number.isInteger(v) ? v.toString() : v.toString()
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
+  try {
+    return JSON.stringify(v)
+  } catch {
+    return String(v)
+  }
 }

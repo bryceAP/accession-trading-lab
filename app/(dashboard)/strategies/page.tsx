@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { StrategiesList, type StrategyRow } from './_components/strategies-list'
@@ -6,11 +7,13 @@ import { pickMetric } from '../backtests/_components/format'
 type Strategy = {
   id: string
   name: string | null
+  display_name: string | null
   version: string | null
   instrument: string | null
   description: string | null
   status: string | null
   updated_at: string | null
+  archived_at: string | null
 }
 
 type BacktestLite = {
@@ -19,17 +22,32 @@ type BacktestLite = {
   metrics: Record<string, unknown> | null
 }
 
-export default async function StrategiesPage() {
+export default async function StrategiesPage({
+  searchParams,
+}: {
+  searchParams: { archived?: string }
+}) {
   const supabase = createClient()
+  const showArchived = searchParams.archived === '1'
 
-  const [stratRes, btRes] = await Promise.all([
-    supabase
-      .from('strategies')
-      .select('id, name, version, instrument, description, status, updated_at')
-      .order('updated_at', { ascending: false }),
+  let stratQuery = supabase
+    .from('strategies')
+    .select('id, name, display_name, version, instrument, description, status, updated_at, archived_at')
+    .order('updated_at', { ascending: false })
+  if (!showArchived) stratQuery = stratQuery.is('archived_at', null)
+
+  // Aggregate over active backtests only — archived ones shouldn't pollute
+  // the "best PnL" badges on the card.
+  const [stratRes, btRes, archivedRes] = await Promise.all([
+    stratQuery,
     supabase
       .from('backtests')
-      .select('strategy_id, strategy_name, metrics'),
+      .select('strategy_id, strategy_name, metrics')
+      .is('archived_at', null),
+    supabase
+      .from('strategies')
+      .select('id', { count: 'exact', head: true })
+      .not('archived_at', 'is', null),
   ])
 
   const errs = [stratRes.error, btRes.error].filter(Boolean)
@@ -37,6 +55,7 @@ export default async function StrategiesPage() {
 
   const strategies = (stratRes.data ?? []) as Strategy[]
   const backtests = (btRes.data ?? []) as BacktestLite[]
+  const archivedCount = archivedRes.count ?? 0
 
   // Build per-strategy aggregates: best total_pnl and backtest count.
   // Bucket by both strategy_id and strategy_name so we can look up either way.
@@ -66,11 +85,13 @@ export default async function StrategiesPage() {
   const rows: StrategyRow[] = strategies.map((s) => ({
     id: s.id,
     name: s.name,
+    display_name: s.display_name,
     version: s.version,
     instrument: s.instrument,
     description: s.description,
     status: s.status,
     updated_at: s.updated_at,
+    archived_at: s.archived_at,
     bestPnl: bestById.get(s.id) ?? (s.name ? bestByName.get(s.name) ?? null : null),
     backtestCount: countById.get(s.id) ?? (s.name ? countByName.get(s.name) ?? 0 : 0),
   }))
@@ -79,13 +100,26 @@ export default async function StrategiesPage() {
     <div className="p-6 space-y-4 max-w-[1400px]">
       <div className="flex items-center justify-between">
         <h1 className="text-sm font-semibold tracking-tight">Strategies</h1>
-        {stratRes.error ? (
-          <Badge variant="destructive" className="text-xs">DB error</Badge>
-        ) : (
-          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-            {rows.length} total
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {stratRes.error ? (
+            <Badge variant="destructive" className="text-xs">DB error</Badge>
+          ) : (
+            <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+              {rows.length} {showArchived ? 'total (incl. archived)' : 'active'}
+            </span>
+          )}
+          <Link
+            href={showArchived ? '/strategies' : '/strategies?archived=1'}
+            className="inline-flex items-center gap-1.5 rounded border border-border bg-card px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+          >
+            {showArchived ? 'Hide archived' : 'Show archived'}
+            {!showArchived && archivedCount ? (
+              <span className="font-mono tabular-nums text-muted-foreground/70">
+                ({archivedCount})
+              </span>
+            ) : null}
+          </Link>
+        </div>
       </div>
 
       <StrategiesList rows={rows} />

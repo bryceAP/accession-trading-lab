@@ -1,8 +1,17 @@
 'use client'
 
-import { useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  ChevronsUpDown,
+  GitCompare,
+  X,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   fmtDate,
@@ -14,21 +23,25 @@ import {
   fmtUsd,
   pickMetric,
   pnlClass,
-  timeframeLabel,
-  TIMEFRAME_OPTIONS,
-  type TimeframeValue,
 } from './format'
 import {
-  buildRunParamBadges,
-  parseRunParams,
-  RunParamBadges,
-  type RunParamBadge,
-  type RunParams,
-} from './run-params'
+  buildConfigBadges,
+  ConfigBadges,
+  entryModeFacet,
+  sessionFacet,
+  spanBucket,
+  type ConfigBadge,
+  type SpanBucket,
+} from './config-badges'
+import { StrategyLabel } from '@/components/strategy-label'
+import { strategyLabel, type StrategyNameInfo } from '@/lib/strategy-names'
+import { strategyColor } from '@/lib/strategy-color'
 
 export type BacktestRow = {
   id: string
+  strategy_id: string | null
   strategy_name: string | null
+  label: string | null
   instrument: string | null
   timeframe: string | null
   start_date: string | null
@@ -36,6 +49,8 @@ export type BacktestRow = {
   completed_at: string | null
   duration_ms: number | null
   metrics: Record<string, unknown> | null
+  config_snapshot: unknown
+  archived_at: string | null
   // Runner-populated summary columns. The list reads these directly so it
   // doesn't have to download equity_curve jsonb or HEAD-count trades per row.
   // Older rows where the runner hasn't backfilled fall through to metrics.
@@ -48,52 +63,61 @@ export type BacktestRow = {
 }
 
 type SortKey =
-  | 'instrument'
-  | 'start_date'
-  | 'total_pnl'
-  | 'gross_pnl'
-  | 'win_rate'
+  | 'completed_at'
+  | 'net_pnl'
   | 'sharpe'
   | 'max_drawdown'
-  | 'total_trades'
-  | 'duration'
-  | 'completed_at'
+  | 'trades_count'
 
 type SortDir = 'asc' | 'desc'
 
 type Derived = {
   row: BacktestRow
-  total_pnl: number | null
+  net_pnl: number | null
   gross_pnl: number | null
   win_rate: number | null
   sharpe: number | null
   max_drawdown: number | null
-  total_trades: number | null
-  // Parsed once so filtering + rendering don't re-walk the metrics jsonb.
-  // Rows where the runner hasn't written run_params yet land at null and
-  // skip badge rendering / filters entirely.
-  runParams: RunParams | null
-  runParamBadges: RunParamBadge[]
+  trades_count: number | null
+  configBadges: ConfigBadge[]
+  session: 'ny' | 'globex'
+  entry_mode: string | null
+  span: SpanBucket | null
 }
 
-type TimeframeFilter = TimeframeValue | 'all'
-type StringFilter = string | 'all'
 const UNNAMED_STRATEGY = '— Unnamed —'
+const MAX_COMPARE = 6
+const SORT_OPTIONS: { key: SortKey; label: string; defaultDir: SortDir }[] = [
+  { key: 'completed_at',  label: 'Ran at',     defaultDir: 'desc' },
+  { key: 'net_pnl',       label: 'Net P&L',    defaultDir: 'desc' },
+  { key: 'sharpe',        label: 'Sharpe',     defaultDir: 'desc' },
+  { key: 'max_drawdown',  label: 'Max DD',     defaultDir: 'asc'  },
+  { key: 'trades_count',  label: 'Trades',     defaultDir: 'desc' },
+]
+const SORT_KEYS = new Set<SortKey>(SORT_OPTIONS.map((o) => o.key))
 
 function derive(row: BacktestRow): Derived {
   // Prefer the runner's typed summary columns. Fall back to fuzzy metrics
   // lookups so existing rows that predate the columns still render.
-  const runParams = parseRunParams(row.metrics)
+  const input = {
+    config_snapshot: row.config_snapshot,
+    label: row.label,
+    timeframe: row.timeframe,
+    start_date: row.start_date,
+    end_date: row.end_date,
+  }
   return {
     row,
-    total_pnl:    row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
-    gross_pnl:    row.gross_pnl     ?? pickMetric(row.metrics, 'gross_pnl'),
-    win_rate:     row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
-    sharpe:       row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
-    max_drawdown: row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
-    total_trades: row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
-    runParams,
-    runParamBadges: buildRunParamBadges(runParams),
+    net_pnl:       row.net_pnl       ?? pickMetric(row.metrics, 'total_pnl'),
+    gross_pnl:     row.gross_pnl     ?? pickMetric(row.metrics, 'gross_pnl'),
+    win_rate:      row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
+    sharpe:        row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
+    max_drawdown:  row.max_drawdown  ?? pickMetric(row.metrics, 'max_drawdown'),
+    trades_count:  row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
+    configBadges:  buildConfigBadges(input),
+    session:       sessionFacet(input),
+    entry_mode:    entryModeFacet(input),
+    span:          spanBucket(row.start_date, row.end_date),
   }
 }
 
@@ -109,69 +133,180 @@ function cmp(a: unknown, b: unknown): number {
 
 function getSortValue(d: Derived, key: SortKey): unknown {
   switch (key) {
-    case 'instrument': return d.row.instrument
-    case 'start_date': return d.row.start_date
-    case 'completed_at': return d.row.completed_at
-    case 'total_pnl': return d.total_pnl
-    case 'gross_pnl': return d.gross_pnl
-    case 'win_rate': return d.win_rate
-    case 'sharpe': return d.sharpe
-    case 'max_drawdown': return d.max_drawdown
-    case 'total_trades': return d.total_trades
-    case 'duration': return d.row.duration_ms
+    case 'completed_at':  return d.row.completed_at
+    case 'net_pnl':       return d.net_pnl
+    case 'sharpe':        return d.sharpe
+    case 'max_drawdown':  return d.max_drawdown
+    case 'trades_count':  return d.trades_count
   }
 }
 
-export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('completed_at')
-  const [sortDir, setSortDir] = useState<SortDir>('desc')
-  const [instrumentFilter, setInstrumentFilter] = useState<string>('')
-  const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
-  const [entryModeFilter, setEntryModeFilter] = useState<StringFilter>('all')
-  const [fillTfFilter, setFillTfFilter] = useState<StringFilter>('all')
+// ── URL-state helpers ───────────────────────────────────────────────────────
+// All filters + sort live in the URL so list views are shareable. Each value
+// here parses defensively (unknown strategy IDs / timeframes are dropped) so
+// hand-edited URLs degrade gracefully instead of throwing.
+
+function parseSet(raw: string | null): Set<string> {
+  if (!raw) return new Set()
+  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))
+}
+
+function setOrUndef(s: Set<string>): string | undefined {
+  return s.size ? Array.from(s).sort().join(',') : undefined
+}
+
+type ParsedQuery = {
+  strategies: Set<string>
+  timeframes: Set<string>
+  session: 'all' | 'ny' | 'globex'
+  entryMode: 'all' | string
+  span: 'all' | SpanBucket
+  labelQ: string
+  sortKey: SortKey
+  sortDir: SortDir
+}
+
+function parseQuery(sp: URLSearchParams): ParsedQuery {
+  const sortRaw = sp.get('sort') ?? ''
+  const [skRaw, sdRaw] = sortRaw.split(':')
+  const sortKey: SortKey = SORT_KEYS.has(skRaw as SortKey) ? (skRaw as SortKey) : 'completed_at'
+  const sortDir: SortDir = sdRaw === 'asc' ? 'asc' : 'desc'
+
+  const sessionRaw = sp.get('session') ?? 'all'
+  const session: ParsedQuery['session'] =
+    sessionRaw === 'ny' || sessionRaw === 'globex' ? sessionRaw : 'all'
+
+  const spanRaw = sp.get('span') ?? 'all'
+  const span: ParsedQuery['span'] =
+    spanRaw === '5wk' || spanRaw === '1yr' || spanRaw === '4yr' || spanRaw === '10yr' || spanRaw === 'other'
+      ? spanRaw
+      : 'all'
+
+  return {
+    strategies: parseSet(sp.get('strategy')),
+    timeframes: parseSet(sp.get('tf')),
+    session,
+    entryMode: sp.get('mode') ?? 'all',
+    span,
+    labelQ: sp.get('q') ?? '',
+    sortKey,
+    sortDir,
+  }
+}
+
+export function BacktestsTable({
+  rows,
+  strategyDirectory,
+}: {
+  rows: BacktestRow[]
+  strategyDirectory?: Record<string, StrategyNameInfo>
+}) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const q = useMemo(() => parseQuery(new URLSearchParams(searchParams.toString())), [searchParams])
+
+  const resolveStrategy = useCallback(
+    (id: string | null, name: string | null): StrategyNameInfo | null => {
+      if (!strategyDirectory) return null
+      if (id && strategyDirectory[id]) return strategyDirectory[id]
+      if (name && strategyDirectory[name]) return strategyDirectory[name]
+      return null
+    },
+    [strategyDirectory],
+  )
+
+  const updateQuery = useCallback(
+    (patch: Partial<{
+      strategies: Set<string>
+      timeframes: Set<string>
+      session: ParsedQuery['session']
+      entryMode: string
+      span: ParsedQuery['span']
+      labelQ: string
+      sortKey: SortKey
+      sortDir: SortDir
+    }>) => {
+      const next = new URLSearchParams(searchParams.toString())
+      const apply = (k: string, v: string | undefined) => {
+        if (v == null || v === '' ) next.delete(k)
+        else next.set(k, v)
+      }
+      if ('strategies' in patch) apply('strategy', setOrUndef(patch.strategies!))
+      if ('timeframes' in patch) apply('tf', setOrUndef(patch.timeframes!))
+      if ('session' in patch) apply('session', patch.session === 'all' ? undefined : patch.session)
+      if ('entryMode' in patch) apply('mode', patch.entryMode === 'all' ? undefined : patch.entryMode)
+      if ('span' in patch) apply('span', patch.span === 'all' ? undefined : patch.span)
+      if ('labelQ' in patch) apply('q', patch.labelQ || undefined)
+      if ('sortKey' in patch || 'sortDir' in patch) {
+        const sk = patch.sortKey ?? q.sortKey
+        const sd = patch.sortDir ?? q.sortDir
+        const isDefault = sk === 'completed_at' && sd === 'desc'
+        apply('sort', isDefault ? undefined : `${sk}:${sd}`)
+      }
+      const qs = next.toString()
+      // Use replace + scroll: false so toggling a chip doesn't blow up the
+      // back-button history or scroll to top of the table.
+      router.replace(qs ? `?${qs}` : '?', { scroll: false })
+    },
+    [router, searchParams, q.sortKey, q.sortDir],
+  )
 
   const derived = useMemo(() => rows.map(derive), [rows])
 
-  const instruments = useMemo(
-    () => Array.from(new Set(rows.map((r) => r.instrument).filter(Boolean) as string[])).sort(),
-    [rows],
-  )
+  // Build facet option lists from the un-filtered data so toggling a filter
+  // doesn't make valid options vanish from the chooser.
+  const strategyOptions = useMemo(() => {
+    const m = new Map<string, { id: string; name: string }>()
+    for (const d of derived) {
+      const id = d.row.strategy_id ?? d.row.strategy_name ?? ''
+      const info = resolveStrategy(d.row.strategy_id, d.row.strategy_name)
+      const name = strategyLabel(info, d.row.strategy_name ?? UNNAMED_STRATEGY)
+      if (id && !m.has(id)) m.set(id, { id, name })
+    }
+    return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [derived, resolveStrategy])
 
-  // Derive entry_mode / fill_tf options from the data so the chip set
-  // adapts if the runner introduces new values. Sorted for stability.
-  const entryModes = useMemo(() => {
+  const timeframeOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const d of derived) if (d.runParams?.entry_mode) set.add(d.runParams.entry_mode)
+    for (const d of derived) if (d.row.timeframe) set.add(d.row.timeframe)
     return Array.from(set).sort()
   }, [derived])
 
-  const fillTfs = useMemo(() => {
+  const entryModeOptions = useMemo(() => {
     const set = new Set<string>()
-    for (const d of derived) if (d.runParams?.fill_tf) set.add(d.runParams.fill_tf)
+    for (const d of derived) if (d.entry_mode) set.add(d.entry_mode)
     return Array.from(set).sort()
   }, [derived])
 
   const filtered = useMemo(() => {
+    const labelRe = q.labelQ.toLowerCase().trim()
     return derived.filter((d) => {
-      if (instrumentFilter && d.row.instrument !== instrumentFilter) return false
-      if (timeframeFilter !== 'all' && d.row.timeframe !== timeframeFilter) return false
-      // Rows without run_params don't match a specific entry_mode/fill_tf
-      // filter — they're filtered out rather than silently included, so
-      // the cell-isolation use case stays honest.
-      if (entryModeFilter !== 'all' && d.runParams?.entry_mode !== entryModeFilter) return false
-      if (fillTfFilter !== 'all' && d.runParams?.fill_tf !== fillTfFilter) return false
+      if (q.strategies.size) {
+        const id = d.row.strategy_id ?? d.row.strategy_name ?? ''
+        if (!q.strategies.has(id)) return false
+      }
+      if (q.timeframes.size) {
+        if (!d.row.timeframe || !q.timeframes.has(d.row.timeframe)) return false
+      }
+      if (q.session !== 'all' && d.session !== q.session) return false
+      if (q.entryMode !== 'all' && d.entry_mode !== q.entryMode) return false
+      if (q.span !== 'all' && d.span !== q.span) return false
+      if (labelRe) {
+        const hay = `${d.row.label ?? ''} ${d.row.strategy_name ?? ''}`.toLowerCase()
+        if (!hay.includes(labelRe)) return false
+      }
       return true
     })
-  }, [derived, instrumentFilter, timeframeFilter, entryModeFilter, fillTfFilter])
+  }, [derived, q])
 
   const sorted = useMemo(() => {
     const out = [...filtered]
     out.sort((a, b) => {
-      const r = cmp(getSortValue(a, sortKey), getSortValue(b, sortKey))
-      return sortDir === 'asc' ? r : -r
+      const r = cmp(getSortValue(a, q.sortKey), getSortValue(b, q.sortKey))
+      return q.sortDir === 'asc' ? r : -r
     })
     return out
-  }, [filtered, sortKey, sortDir])
+  }, [filtered, q.sortKey, q.sortDir])
 
   // Group preserving the sorted order — sections appear in the order their
   // first row would, so sorting by completed_at desc floats the most-recently-
@@ -190,118 +325,141 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
     return Array.from(map.entries())
   }, [sorted])
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+  function toggleSet(key: 'strategies' | 'timeframes', value: string) {
+    const cur = new Set(key === 'strategies' ? q.strategies : q.timeframes)
+    if (cur.has(value)) cur.delete(value)
+    else cur.add(value)
+    updateQuery({ [key]: cur } as Partial<{ strategies: Set<string>; timeframes: Set<string> }>)
+  }
+
+  function setSort(k: SortKey) {
+    if (q.sortKey === k) {
+      updateQuery({ sortDir: q.sortDir === 'asc' ? 'desc' : 'asc' })
     } else {
-      setSortKey(key)
-      // Numeric and date columns default to descending; string columns to ascending.
-      const numericOrDate: SortKey[] = [
-        'total_pnl',
-        'gross_pnl',
-        'win_rate',
-        'sharpe',
-        'max_drawdown',
-        'total_trades',
-        'duration',
-        'completed_at',
-        'start_date',
-      ]
-      setSortDir(numericOrDate.includes(key) ? 'desc' : 'asc')
+      const def = SORT_OPTIONS.find((o) => o.key === k)?.defaultDir ?? 'desc'
+      updateQuery({ sortKey: k, sortDir: def })
     }
   }
 
   const filtersDirty =
-    instrumentFilter !== '' ||
-    timeframeFilter !== 'all' ||
-    entryModeFilter !== 'all' ||
-    fillTfFilter !== 'all'
+    q.strategies.size > 0 ||
+    q.timeframes.size > 0 ||
+    q.session !== 'all' ||
+    q.entryMode !== 'all' ||
+    q.span !== 'all' ||
+    q.labelQ !== ''
 
   function clearFilters() {
-    setInstrumentFilter('')
-    setTimeframeFilter('all')
-    setEntryModeFilter('all')
-    setFillTfFilter('all')
+    updateQuery({
+      strategies: new Set(),
+      timeframes: new Set(),
+      session: 'all',
+      entryMode: 'all',
+      span: 'all',
+      labelQ: '',
+    })
   }
+
+  // ── Multi-select for compare ───────────────────────────────────
+  // Selection lives in component state (not URL) so chip-toggling filters
+  // doesn't blow it away. We only push selected IDs into the URL when the
+  // user clicks "Compare N", which navigates to /backtests/compare?ids=…
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const visibleIds = useMemo(() => new Set(sorted.map((d) => d.row.id)), [sorted])
+
+  function toggleSelected(id: string) {
+    const next = new Set(selected)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      if (next.size >= MAX_COMPARE) return
+      next.add(id)
+    }
+    setSelected(next)
+  }
+  function clearSelected() {
+    setSelected(new Set())
+  }
+
+  // Drop selected IDs that filtered out of view so the footer count matches
+  // what the user can actually see. (Selection sticks across sort changes
+  // and accent-chip toggles but not across full-filter changes.)
+  const selectedVisible = useMemo(
+    () => Array.from(selected).filter((id) => visibleIds.has(id)),
+    [selected, visibleIds],
+  )
+  const compareHref = `/backtests/compare?ids=${selectedVisible.join(',')}`
+  const compareDisabled = selectedVisible.length < 2
 
   return (
     <div className="space-y-3">
-      {/* ── Timeframe chips ─────────────────────────────────── */}
-      <ChipRow label="Timeframe">
-        <FilterChip
-          label="All"
-          active={timeframeFilter === 'all'}
-          onClick={() => setTimeframeFilter('all')}
+      {/* ── Filter row ─────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <FacetMulti
+          label="Strategy"
+          options={strategyOptions.map((s) => ({ value: s.id, label: s.name }))}
+          values={q.strategies}
+          onToggle={(v) => toggleSet('strategies', v)}
         />
-        {TIMEFRAME_OPTIONS.map((tf) => (
-          <FilterChip
-            key={tf.value}
-            label={tf.label}
-            active={timeframeFilter === tf.value}
-            onClick={() => setTimeframeFilter(tf.value)}
+        <FacetMulti
+          label="Timeframe"
+          options={timeframeOptions.map((t) => ({ value: t, label: t }))}
+          values={q.timeframes}
+          onToggle={(v) => toggleSet('timeframes', v)}
+        />
+        <FacetSingle
+          label="Session"
+          value={q.session}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'globex', label: '23/5 Globex' },
+            { value: 'ny', label: 'NY hours' },
+          ]}
+          onChange={(v) => updateQuery({ session: v as ParsedQuery['session'] })}
+        />
+        {entryModeOptions.length > 0 && (
+          <FacetSingle
+            label="Entry"
+            value={q.entryMode}
+            options={[
+              { value: 'all', label: 'All' },
+              ...entryModeOptions.map((m) => ({ value: m, label: m })),
+            ]}
+            onChange={(v) => updateQuery({ entryMode: v })}
           />
-        ))}
-      </ChipRow>
-
-      {/* ── Run-param chips ─────────────────────────────────── */}
-      {(entryModes.length > 0 || fillTfs.length > 0) && (
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          {entryModes.length > 0 && (
-            <ChipRow label="Entry mode">
-              <FilterChip
-                label="All"
-                active={entryModeFilter === 'all'}
-                onClick={() => setEntryModeFilter('all')}
-              />
-              {entryModes.map((m) => (
-                <FilterChip
-                  key={m}
-                  label={m}
-                  active={entryModeFilter === m}
-                  onClick={() => setEntryModeFilter(m)}
-                />
-              ))}
-            </ChipRow>
-          )}
-          {fillTfs.length > 0 && (
-            <ChipRow label="Fill TF">
-              <FilterChip
-                label="All"
-                active={fillTfFilter === 'all'}
-                onClick={() => setFillTfFilter('all')}
-              />
-              {fillTfs.map((t) => (
-                <FilterChip
-                  key={t}
-                  label={t}
-                  active={fillTfFilter === t}
-                  onClick={() => setFillTfFilter(t)}
-                />
-              ))}
-            </ChipRow>
-          )}
-        </div>
-      )}
-
-      {/* ── Other filters ───────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2">
-        <FilterSelect
-          label="Instrument"
-          value={instrumentFilter}
-          onChange={setInstrumentFilter}
-          options={instruments}
-        />
-        {filtersDirty && (
-          <button
-            type="button"
-            onClick={clearFilters}
-            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Clear filters
-          </button>
         )}
-        <div className="ml-auto text-[10px] text-muted-foreground font-mono tabular-nums">
-          {sorted.length} of {rows.length}
+        <FacetSingle
+          label="Span"
+          value={q.span}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: '5wk', label: '5wk' },
+            { value: '1yr', label: '1yr' },
+            { value: '4yr', label: '4yr' },
+            { value: '10yr', label: '10yr' },
+            { value: 'other', label: 'Other' },
+          ]}
+          onChange={(v) => updateQuery({ span: v as ParsedQuery['span'] })}
+        />
+        <LabelSearch value={q.labelQ} onChange={(v) => updateQuery({ labelQ: v })} />
+        <div className="ml-auto flex items-center gap-3">
+          <SortControl
+            sortKey={q.sortKey}
+            sortDir={q.sortDir}
+            onChange={(k, d) => updateQuery({ sortKey: k, sortDir: d })}
+          />
+          {filtersDirty && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Clear filters
+            </button>
+          )}
+          <div className="text-[10px] text-muted-foreground font-mono tabular-nums">
+            {sorted.length} of {rows.length}
+          </div>
         </div>
       </div>
 
@@ -311,17 +469,57 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
           {rows.length === 0 ? 'No backtests recorded yet.' : 'No backtests match the current filters.'}
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className={cn('space-y-4', selectedVisible.length > 0 && 'pb-16')}>
           {grouped.map(([strategy, items]) => (
             <StrategySection
               key={strategy}
               strategy={strategy}
+              info={resolveStrategy(items[0]?.row.strategy_id ?? null, items[0]?.row.strategy_name ?? null)}
               items={items}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              onSort={toggleSort}
+              sortKey={q.sortKey}
+              sortDir={q.sortDir}
+              onSort={setSort}
+              selected={selected}
+              onToggleSelected={toggleSelected}
+              selectionFull={selected.size >= MAX_COMPARE}
             />
           ))}
+        </div>
+      )}
+
+      {/* ── Sticky compare footer ──────────────────────────────────── */}
+      {selectedVisible.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-4 pointer-events-none">
+          <div className="pointer-events-auto inline-flex items-center gap-3 rounded border border-border bg-popover px-3 py-2 shadow-xl">
+            <span className="text-xs text-muted-foreground">
+              <span className="font-mono tabular-nums text-foreground">{selectedVisible.length}</span>
+              {' / '}
+              <span className="font-mono tabular-nums">{MAX_COMPARE}</span>
+              {' selected'}
+            </span>
+            <Link
+              href={compareDisabled ? '#' : compareHref}
+              aria-disabled={compareDisabled}
+              onClick={(e) => compareDisabled && e.preventDefault()}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs transition-colors',
+                compareDisabled
+                  ? 'border-border bg-muted/40 text-muted-foreground cursor-not-allowed'
+                  : 'border-foreground/40 bg-foreground/10 text-foreground hover:bg-foreground/20',
+              )}
+            >
+              <GitCompare className="h-3 w-3" />
+              Compare {selectedVisible.length} {selectedVisible.length === 1 ? 'backtest' : 'backtests'}
+            </Link>
+            <button
+              type="button"
+              onClick={clearSelected}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <X className="h-3 w-3" />
+              Clear
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -330,35 +528,60 @@ export function BacktestsTable({ rows }: { rows: BacktestRow[] }) {
 
 function StrategySection({
   strategy,
+  info,
   items,
   sortKey,
   sortDir,
   onSort,
+  selected,
+  onToggleSelected,
+  selectionFull,
 }: {
   strategy: string
+  info: StrategyNameInfo | null
   items: Derived[]
   sortKey: SortKey
   sortDir: SortDir
   onSort: (k: SortKey) => void
+  selected: Set<string>
+  onToggleSelected: (id: string) => void
+  selectionFull: boolean
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const Chevron = collapsed ? ChevronRight : ChevronDown
+  const stratNameForColor = info?.name ?? strategy
+  const primary = strategyLabel(info, strategy)
+  const showSecondary = info?.name && primary !== info.name
   return (
-    <section className="rounded border border-border bg-card overflow-hidden">
+    <section
+      className="rounded border border-l-4 border-border bg-card overflow-hidden"
+      style={{ borderLeftColor: strategyColor(stratNameForColor) }}
+    >
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
         aria-expanded={!collapsed}
         className={cn(
-          'w-full flex items-baseline justify-between bg-muted/30 px-3 py-2 text-left cursor-pointer hover:bg-muted/50 transition-colors',
+          'w-full flex items-center justify-between bg-muted/30 px-3 py-2 text-left cursor-pointer hover:bg-muted/50 transition-colors',
           !collapsed && 'border-b border-border',
         )}
       >
-        <span className="flex items-center gap-1.5">
-          <Chevron className="h-3 w-3 text-muted-foreground" />
-          <span className="text-xs font-semibold tracking-tight text-foreground">{strategy}</span>
+        <span className="flex items-center gap-2 min-w-0">
+          <Chevron className="h-3 w-3 text-muted-foreground shrink-0" />
+          <StrategyLabel
+            info={info}
+            fallback={strategy}
+            dotSize={10}
+            className="text-xs font-semibold tracking-tight text-foreground"
+            truncate={false}
+          />
+          {showSecondary && (
+            <span className="text-[10px] font-mono text-muted-foreground truncate">
+              {info?.name}
+            </span>
+          )}
         </span>
-        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums shrink-0">
           {items.length} {items.length === 1 ? 'backtest' : 'backtests'}
         </span>
       </button>
@@ -367,21 +590,35 @@ function StrategySection({
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border bg-muted/10">
-              <Th label="Backtest"   k="instrument"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <Th label="Date range" k="start_date"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <Th label="Total P&L"  k="total_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Gross P&L"  k="gross_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Win rate"   k="win_rate"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Sharpe"     k="sharpe"         sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Max DD"     k="max_drawdown"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Trades"     k="total_trades"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Duration"   k="duration"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <Th label="Ran at"     k="completed_at"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="w-8 px-2 py-2" aria-label="Select" />
+              <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Backtest
+              </th>
+              <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Date range
+              </th>
+              <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Win rate
+              </th>
+              <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Duration
+              </th>
+              <Th label="Ran at"   k="completed_at"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
             </tr>
           </thead>
           <tbody>
             {items.map((d) => (
-              <BodyRow key={d.row.id} d={d} />
+              <BodyRow
+                key={d.row.id}
+                d={d}
+                selected={selected.has(d.row.id)}
+                disabled={!selected.has(d.row.id) && selectionFull}
+                onToggleSelected={onToggleSelected}
+              />
             ))}
           </tbody>
         </table>
@@ -391,40 +628,74 @@ function StrategySection({
   )
 }
 
-function BodyRow({ d }: { d: Derived }) {
+function BodyRow({
+  d,
+  selected,
+  disabled,
+  onToggleSelected,
+}: {
+  d: Derived
+  selected: boolean
+  disabled: boolean
+  onToggleSelected: (id: string) => void
+}) {
   const { row } = d
   return (
-    <tr className="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
+    <tr className={cn(
+      'border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors',
+      selected && 'bg-muted/30',
+      row.archived_at && 'opacity-60',
+    )}>
+      <td className="w-8 px-2 py-2">
+        <button
+          type="button"
+          onClick={() => onToggleSelected(row.id)}
+          disabled={disabled}
+          aria-pressed={selected}
+          aria-label={selected ? 'Deselect' : 'Select for comparison'}
+          className={cn(
+            'inline-flex h-4 w-4 items-center justify-center rounded border transition-colors',
+            selected
+              ? 'border-foreground/60 bg-foreground/10 text-foreground'
+              : 'border-border bg-card text-transparent hover:border-foreground/30',
+            disabled && 'opacity-30 cursor-not-allowed',
+          )}
+        >
+          <Check className="h-3 w-3" />
+        </button>
+      </td>
       <td className="px-3 py-2">
         <Link
           href={`/backtests/${row.id}`}
           className="hover:text-foreground text-foreground/90 hover:underline underline-offset-2 font-mono whitespace-nowrap"
         >
-          {row.instrument ?? '—'} <span className="text-muted-foreground/40">•</span> {timeframeLabel(row.timeframe)}
+          {row.label?.trim() || `${row.instrument ?? '—'} · ${row.timeframe ?? '—'}`}
         </Link>
+        {row.archived_at && (
+          <span className="ml-2 inline-flex h-4 items-center rounded border border-border bg-muted/40 px-1 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
+            archived
+          </span>
+        )}
       </td>
       <td className="px-3 py-2">
         <div className="flex flex-col gap-1">
           <span className="font-mono text-muted-foreground tabular-nums whitespace-nowrap">
             {fmtDate(row.start_date)} <span className="text-muted-foreground/40">→</span> {fmtDate(row.end_date)}
           </span>
-          {d.runParamBadges.length > 0 && (
-            <RunParamBadges badges={d.runParamBadges} />
+          {d.configBadges.length > 0 && (
+            <ConfigBadges badges={d.configBadges} />
           )}
         </div>
       </td>
-      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.total_pnl))}>
-        {d.total_pnl == null ? '—' : fmtUsd(d.total_pnl, { signed: true })}
-      </td>
-      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.gross_pnl))}>
-        {d.gross_pnl == null ? '—' : fmtUsd(d.gross_pnl, { signed: true })}
+      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', pnlClass(d.net_pnl))}>
+        {d.net_pnl == null ? '—' : fmtUsd(d.net_pnl, { signed: true })}
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPct(d.win_rate)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{d.sharpe == null ? '—' : fmtNumber(d.sharpe, 2)}</td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', d.max_drawdown != null && d.max_drawdown > 0 && 'text-[var(--negative)]')}>
         {d.max_drawdown == null ? '—' : d.max_drawdown === 0 ? fmtUsd(0) : `−${fmtUsd(d.max_drawdown)}`}
       </td>
-      <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtInt(d.total_trades)}</td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtInt(d.trades_count)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap">
         {row.duration_ms != null ? (
           fmtElapsed(row.duration_ms)
@@ -441,43 +712,6 @@ function BodyRow({ d }: { d: Derived }) {
         {fmtDateTimeWithSeconds(row.completed_at)}
       </td>
     </tr>
-  )
-}
-
-function ChipRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-[10px] uppercase tracking-widest text-muted-foreground">
-        {label}
-      </span>
-      <div className="flex flex-wrap items-center gap-1">{children}</div>
-    </div>
-  )
-}
-
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        'h-7 rounded-full border px-2.5 font-mono text-[11px] uppercase tracking-wide transition-colors',
-        active
-          ? 'border-foreground/60 bg-foreground/10 text-foreground'
-          : 'border-border bg-card text-muted-foreground hover:border-foreground/30 hover:text-foreground',
-      )}
-    >
-      {label}
-    </button>
   )
 }
 
@@ -521,16 +755,18 @@ function Th({
   )
 }
 
-function FilterSelect({
+// ── Facet controls ─────────────────────────────────────────────────────────
+
+function FacetSingle({
   label,
   value,
-  onChange,
   options,
+  onChange,
 }: {
   label: string
   value: string
+  options: { value: string; label: string }[]
   onChange: (v: string) => void
-  options: string[]
 }) {
   return (
     <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
@@ -540,11 +776,133 @@ function FilterSelect({
         onChange={(e) => onChange(e.target.value)}
         className="h-7 rounded border border-border bg-card px-2 text-xs text-foreground font-mono focus:outline-none focus:border-ring"
       >
-        <option value="">All</option>
         {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+    </label>
+  )
+}
+
+function FacetMulti({
+  label,
+  options,
+  values,
+  onToggle,
+}: {
+  label: string
+  options: { value: string; label: string }[]
+  values: Set<string>
+  onToggle: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  if (options.length === 0) return null
+  const summary =
+    values.size === 0
+      ? 'All'
+      : values.size === 1
+        ? options.find((o) => o.value === Array.from(values)[0])?.label ?? '1 selected'
+        : `${values.size} selected`
+  return (
+    <div className="relative inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <span className="uppercase tracking-widest">{label}</span>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'h-7 rounded border bg-card px-2 text-xs font-mono focus:outline-none focus:border-ring transition-colors inline-flex items-center gap-1',
+          values.size > 0 ? 'border-foreground/40 text-foreground' : 'border-border text-foreground/80',
+        )}
+      >
+        <span>{summary}</span>
+        <ChevronDown className="h-3 w-3 opacity-60" />
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setOpen(false)}
+            aria-hidden
+          />
+          <div className="absolute z-40 left-0 top-full mt-1 w-[220px] rounded border border-border bg-popover shadow-xl py-1 max-h-[280px] overflow-y-auto">
+            {options.map((o) => {
+              const checked = values.has(o.value)
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => onToggle(o.value)}
+                  className="flex w-full items-center gap-2 px-2 py-1.5 text-xs text-left hover:bg-muted/50 transition-colors"
+                >
+                  <span
+                    className={cn(
+                      'inline-flex h-3.5 w-3.5 items-center justify-center rounded border transition-colors',
+                      checked
+                        ? 'border-foreground/60 bg-foreground/10 text-foreground'
+                        : 'border-border bg-card text-transparent',
+                    )}
+                  >
+                    <Check className="h-3 w-3" />
+                  </span>
+                  <span className="truncate">{o.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function LabelSearch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <span className="uppercase tracking-widest">Label</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="contains…"
+        className="h-7 w-[140px] rounded border border-border bg-card px-2 text-xs text-foreground font-mono focus:outline-none focus:border-ring placeholder:text-muted-foreground/40"
+      />
+    </label>
+  )
+}
+
+function SortControl({
+  sortKey,
+  sortDir,
+  onChange,
+}: {
+  sortKey: SortKey
+  sortDir: SortDir
+  onChange: (k: SortKey, d: SortDir) => void
+}) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <span className="uppercase tracking-widest">Sort</span>
+      <select
+        value={sortKey}
+        onChange={(e) => {
+          const k = e.target.value as SortKey
+          const def = SORT_OPTIONS.find((o) => o.key === k)?.defaultDir ?? 'desc'
+          onChange(k, def)
+        }}
+        className="h-7 rounded border border-border bg-card px-2 text-xs text-foreground font-mono focus:outline-none focus:border-ring"
+      >
+        {SORT_OPTIONS.map((o) => (
+          <option key={o.key} value={o.key}>{o.label}</option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => onChange(sortKey, sortDir === 'asc' ? 'desc' : 'asc')}
+        aria-label={`Sort direction ${sortDir}`}
+        className="h-7 rounded border border-border bg-card px-1.5 text-foreground/80 hover:text-foreground hover:border-foreground/30 transition-colors"
+      >
+        {sortDir === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
     </label>
   )
 }

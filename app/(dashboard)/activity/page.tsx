@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
+import { fetchStrategyNameMap, type StrategyNameInfo } from '@/lib/strategy-names'
 import { ActivityLog, type ActivityEvent } from './_components/activity-log'
 
 const PAGE_SIZE = 50
@@ -9,7 +10,7 @@ export default async function ActivityPage() {
 
   // Initial page of events + the full set of distinct event_types / sources for
   // the filter chips (so rare types still appear even if absent from page 1).
-  const [eventsRes, typesRes, sourcesRes] = await Promise.all([
+  const [eventsRes, typesRes, sourcesRes, strategyMap] = await Promise.all([
     supabase
       .from('events')
       .select('id, ts, event_type, source, data')
@@ -18,7 +19,13 @@ export default async function ActivityPage() {
       .limit(PAGE_SIZE),
     supabase.from('events').select('event_type'),
     supabase.from('events').select('source'),
+    fetchStrategyNameMap(supabase),
   ])
+
+  const strategyDirectory: Record<string, StrategyNameInfo> = {}
+  strategyMap.forEach((info, key) => {
+    strategyDirectory[key] = info
+  })
 
   const errs = [eventsRes.error, typesRes.error, sourcesRes.error].filter(Boolean)
   if (errs.length) console.error('[Activity]', errs)
@@ -44,6 +51,7 @@ export default async function ActivityPage() {
         initialEvents={initialEvents}
         knownEventTypes={knownEventTypes}
         knownSources={knownSources}
+        strategyDirectory={strategyDirectory}
       />
     </div>
   )

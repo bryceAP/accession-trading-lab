@@ -17,6 +17,8 @@ import {
   formatET,
   sourceStyle,
 } from './styles'
+import { StrategyChip } from '@/components/strategy-label'
+import type { StrategyNameInfo } from '@/lib/strategy-names'
 
 export type ActivityEvent = {
   id: number
@@ -79,10 +81,12 @@ export function ActivityLog({
   initialEvents,
   knownEventTypes,
   knownSources,
+  strategyDirectory,
 }: {
   initialEvents: ActivityEvent[]
   knownEventTypes: string[]
   knownSources: string[]
+  strategyDirectory?: Record<string, StrategyNameInfo>
 }) {
   const supabase = useMemo(() => createClient(), [])
 
@@ -413,6 +417,7 @@ export function ActivityLog({
                 expanded={expanded.has(ev.id)}
                 isNew={newIds.has(ev.id)}
                 onToggle={() => toggleExpand(ev.id)}
+                strategyDirectory={strategyDirectory}
               />
             ))}
           </div>
@@ -452,19 +457,29 @@ function FilterGroup({ label, children }: { label: string; children: React.React
   )
 }
 
+function eventStrategyName(ev: ActivityEvent): string | null {
+  const v = ev.data?.strategy
+  if (typeof v === 'string' && v.trim()) return v
+  return null
+}
+
 function EventRow({
   ev,
   expanded,
   isNew,
   onToggle,
+  strategyDirectory,
 }: {
   ev: ActivityEvent
   expanded: boolean
   isNew: boolean
   onToggle: () => void
+  strategyDirectory?: Record<string, StrategyNameInfo>
 }) {
   const style = eventStyle(ev.event_type)
   const Chev = expanded ? ChevronDown : ChevronRight
+  const stratName = eventStrategyName(ev)
+  const stratInfo = stratName && strategyDirectory ? strategyDirectory[stratName] ?? null : null
   return (
     <div
       className={cn(
@@ -495,6 +510,9 @@ function EventRow({
         >
           {ev.source}
         </span>
+        {stratName && (
+          <StrategyChip info={stratInfo} fallback={stratName} className="shrink-0" />
+        )}
         <span className="text-xs text-foreground/85 truncate flex-1 min-w-0">
           {eventSummary(ev.event_type, ev.data)}
         </span>
