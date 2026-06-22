@@ -472,12 +472,12 @@ export default async function BacktestDetailPage({
               Exit breakdown
             </h2>
             <p className="text-[11px] text-muted-foreground leading-snug">
-              Trades grouped by why they exited. Each card shows that bucket's
-              count, total net P&amp;L, and{' '}
+              Trades grouped by why they exited. Each card shows count, total
+              net P&amp;L, and{' '}
               <span className="text-foreground/80">Net +%</span> — the share of
-              those trades that ended net-profitable after costs.{' '}
+              those trades that ended net-positive after costs.{' '}
               <span className="text-foreground/60">
-                (So Hard stop's Net +% should be near 0%, Target's near 100%.)
+                (Expect Hard stop near 0% and Target near 100%.)
               </span>
             </p>
           </div>
@@ -500,8 +500,8 @@ export default async function BacktestDetailPage({
                 of{' '}
                 <span className="font-mono tabular-nums">{totalCount.toLocaleString()}</span>{' '}
                 trade{unattributed === 1 ? '' : 's'} ({pct.toFixed(1)}%) exited
-                without an attributed reason — the strategy didn't tag the
-                closing order. Treat these "Other" stats with caution.
+                without an attributed reason — the strategy did not tag the
+                closing order. Treat the Other bucket stats with caution.
               </div>
             )
           })()}
