@@ -67,6 +67,7 @@ export type BacktestRow = {
 type SortKey =
   | 'completed_at'
   | 'net_pnl'
+  | 'win_rate'
   | 'sharpe'
   | 'max_drawdown'
   | 'trades_count'
@@ -92,6 +93,7 @@ const MAX_COMPARE = 6
 const SORT_OPTIONS: { key: SortKey; label: string; defaultDir: SortDir }[] = [
   { key: 'completed_at',  label: 'Ran at',     defaultDir: 'desc' },
   { key: 'net_pnl',       label: 'Net P&L',    defaultDir: 'desc' },
+  { key: 'win_rate',      label: 'Win rate',   defaultDir: 'desc' },
   { key: 'sharpe',        label: 'Sharpe',     defaultDir: 'desc' },
   { key: 'max_drawdown',  label: 'Max DD',     defaultDir: 'asc'  },
   { key: 'trades_count',  label: 'Trades',     defaultDir: 'desc' },
@@ -128,6 +130,23 @@ function derive(row: BacktestRow): Derived {
   }
 }
 
+// Parse a timeframe string ("1m", "15m", "1h", "4h", "1d", "30s") into minutes
+// so dropdowns can sort least → greatest numerically. Bare numbers are read as
+// minutes; anything we can't parse sorts to the end via +Infinity.
+function timeframeMinutes(tf: string): number {
+  const m = tf.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)\s*([smhd]?)$/)
+  if (!m) return Number.POSITIVE_INFINITY
+  const n = Number(m[1])
+  switch (m[2]) {
+    case 's': return n / 60
+    case 'h': return n * 60
+    case 'd': return n * 60 * 24
+    case 'm':
+    case '':  return n
+    default:  return Number.POSITIVE_INFINITY
+  }
+}
+
 function cmp(a: unknown, b: unknown): number {
   const aN = a == null
   const bN = b == null
@@ -142,6 +161,7 @@ function getSortValue(d: Derived, key: SortKey): unknown {
   switch (key) {
     case 'completed_at':  return d.row.completed_at
     case 'net_pnl':       return d.net_pnl
+    case 'win_rate':      return d.win_rate
     case 'sharpe':        return d.sharpe
     case 'max_drawdown':  return d.max_drawdown
     case 'trades_count':  return d.trades_count
@@ -276,7 +296,12 @@ export function BacktestsTable({
   const timeframeOptions = useMemo(() => {
     const set = new Set<string>()
     for (const d of derived) if (d.row.timeframe) set.add(d.row.timeframe)
-    return Array.from(set).sort()
+    return Array.from(set).sort((a, b) => {
+      const av = timeframeMinutes(a)
+      const bv = timeframeMinutes(b)
+      if (av !== bv) return av - bv
+      return a.localeCompare(b)
+    })
   }, [derived])
 
   const entryModeOptions = useMemo(() => {
@@ -333,9 +358,10 @@ export function BacktestsTable({
   }, [sorted])
 
   // "Recent runs" — the 10 most-recently-completed backtests, pulled from the
-  // post-filter view so toggling filters scopes it sensibly. Sorted newest
-  // first regardless of the active sort column so this section always means
-  // "what did I just finish running".
+  // post-filter view so toggling filters scopes it sensibly. The *set* is
+  // always the 10 newest by completed_at (that's what makes this section
+  // mean "what just finished"), but the rows within respect the active sort
+  // so clicking a column header reorders them like every other table.
   const recentRuns = useMemo(() => {
     const completed = filtered.filter((d) => d.row.completed_at)
     completed.sort((a, b) => {
@@ -343,8 +369,13 @@ export function BacktestsTable({
       const tb = b.row.completed_at ? new Date(b.row.completed_at).getTime() : 0
       return tb - ta
     })
-    return completed.slice(0, 10)
-  }, [filtered])
+    const top = completed.slice(0, 10)
+    top.sort((a, b) => {
+      const r = cmp(getSortValue(a, q.sortKey), getSortValue(b, q.sortKey))
+      return q.sortDir === 'asc' ? r : -r
+    })
+    return top
+  }, [filtered, q.sortKey, q.sortDir])
 
   function toggleSet(key: 'strategies' | 'timeframes', value: string) {
     const cur = new Set(key === 'strategies' ? q.strategies : q.timeframes)
@@ -628,9 +659,7 @@ function RecentRunsSection({
                 Date range
               </th>
               <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                Win rate
-              </th>
+              <Th label="Win rate" k="win_rate"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
@@ -737,9 +766,7 @@ function StrategySection({
                 Date range
               </th>
               <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
-              <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                Win rate
-              </th>
+              <Th label="Win rate" k="win_rate"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
