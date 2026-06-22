@@ -502,6 +502,30 @@ export default async function BacktestDetailPage({
           <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Exit breakdown
           </h2>
+          {(() => {
+            // Mirror the runner's `⚠️ N trade(s) had no attributed reason`
+            // log — surface silent attribution gaps where the strategy didn't
+            // tag the closing order, so they don't masquerade as a normal
+            // "Other" bucket. `reason === null` covers pre-tagging trades.
+            const unattributed = exitBreakdown
+              .filter((g) => g.reason === 'other' || g.reason == null)
+              .reduce((acc, g) => acc + g.total.count, 0)
+            const totalCount = exitBreakdown.reduce((acc, g) => acc + g.total.count, 0)
+            if (unattributed === 0) return null
+            const pct = totalCount > 0 ? (unattributed / totalCount) * 100 : 0
+            return (
+              <div className="rounded border border-[var(--negative)]/30 bg-[var(--negative)]/5 px-3 py-2 text-[11px] text-foreground/80">
+                <span className="font-mono tabular-nums text-[var(--negative)]">
+                  {unattributed.toLocaleString()}
+                </span>{' '}
+                of{' '}
+                <span className="font-mono tabular-nums">{totalCount.toLocaleString()}</span>{' '}
+                trade{unattributed === 1 ? '' : 's'} ({pct.toFixed(1)}%) exited
+                without an attributed reason — the strategy didn't tag the
+                closing order. Treat these "Other" stats with caution.
+              </div>
+            )
+          })()}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {exitBreakdown.map((g) => (
               <ExitReasonCard key={g.reason} group={g} />
