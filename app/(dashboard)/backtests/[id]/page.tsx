@@ -461,47 +461,26 @@ export default async function BacktestDetailPage({
         </section>
       )}
 
-      {/* ── Equity curve (hero) ───────────────────────────────── */}
-      <section className="rounded border border-border bg-card p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Equity curve
-          </h2>
-          <span className="text-[10px] text-muted-foreground font-mono">
-            {equityCurve.length.toLocaleString()}
-            {equityDownsampled && ` of ${fullEquityCurve.length.toLocaleString()}`} pts
-            {' · '}
-            {tradeMarkers.length.toLocaleString()}
-            {markersDownsampled && ` of ${allMarkers.length.toLocaleString()}`} marker{tradeMarkers.length === 1 ? '' : 's'}
-          </span>
-        </div>
-        <EquityChart curve={equityCurve} trades={tradeMarkers} />
-      </section>
-
-      {/* ── Drawdown ──────────────────────────────────────────── */}
-      <section className="rounded border border-border bg-card p-4 space-y-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Drawdown
-        </h2>
-        <DrawdownChart curve={equityCurve} />
-      </section>
-
-      {/* ── Price chart placeholder ───────────────────────────── */}
-      <section className="rounded border border-border border-dashed bg-card/50 p-6 text-center">
-        <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
-          Price chart
-        </div>
-        <div className="text-xs text-muted-foreground">
-          Price chart with trade annotations — coming soon.
-        </div>
-      </section>
-
       {/* ── Exit breakdown ────────────────────────────────────── */}
+      {/* Sits above the equity/drawdown charts so the "why did this run
+          finish where it did" answer lands first — the curve below is then
+          easier to read with the exit mix already in mind. */}
       {exitBreakdown.length > 0 && (
         <section className="rounded border border-border bg-card p-4 space-y-3">
-          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Exit breakdown
-          </h2>
+          <div className="space-y-1">
+            <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Exit breakdown
+            </h2>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Trades grouped by why they exited. Each card shows that bucket's
+              count, total net P&amp;L, and{' '}
+              <span className="text-foreground/80">Net +%</span> — the share of
+              those trades that ended net-profitable after costs.{' '}
+              <span className="text-foreground/60">
+                (So Hard stop's Net +% should be near 0%, Target's near 100%.)
+              </span>
+            </p>
+          </div>
           {(() => {
             // Mirror the runner's `⚠️ N trade(s) had no attributed reason`
             // log — surface silent attribution gaps where the strategy didn't
@@ -533,6 +512,31 @@ export default async function BacktestDetailPage({
           </div>
         </section>
       )}
+
+      {/* ── Equity curve (hero) ───────────────────────────────── */}
+      <section className="rounded border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Equity curve
+          </h2>
+          <span className="text-[10px] text-muted-foreground font-mono">
+            {equityCurve.length.toLocaleString()}
+            {equityDownsampled && ` of ${fullEquityCurve.length.toLocaleString()}`} pts
+            {' · '}
+            {tradeMarkers.length.toLocaleString()}
+            {markersDownsampled && ` of ${allMarkers.length.toLocaleString()}`} marker{tradeMarkers.length === 1 ? '' : 's'}
+          </span>
+        </div>
+        <EquityChart curve={equityCurve} trades={tradeMarkers} />
+      </section>
+
+      {/* ── Drawdown ──────────────────────────────────────────── */}
+      <section className="rounded border border-border bg-card p-4 space-y-3">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Drawdown
+        </h2>
+        <DrawdownChart curve={equityCurve} />
+      </section>
 
       {/* ── Trades table ──────────────────────────────────────── */}
       <section className="rounded border border-border bg-card overflow-hidden">
@@ -755,8 +759,11 @@ function SideAggBlock({ label, agg }: { label: string; agg: SideAgg }) {
               {fmtUsd(agg.netPnl, { signed: true })}
             </span>
           </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Win</span>
+          <div
+            className="flex items-baseline justify-between gap-2"
+            title="Share of these exits that ended net-positive after costs"
+          >
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Net +%</span>
             <span className="text-xs font-mono tabular-nums">
               {winRate == null ? '—' : `${(winRate * 100).toFixed(1)}%`}
             </span>
