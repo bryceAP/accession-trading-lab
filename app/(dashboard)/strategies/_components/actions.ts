@@ -63,14 +63,33 @@ export async function updateStrategyStatus(strategyId: string, status: string) {
 // list queries but still recoverable via the "Show archived" toggle. Distinct
 // from the existing status='archived' lifecycle stage, which is a manual
 // signal Bryce sets when a strategy stops being interesting.
+//
+// Cascades to associated backtests (match by strategy_id OR strategy_name to
+// catch runner-written rows without FK). Only flips backtests that are still
+// active — pre-archived rows keep their original timestamp so unarchiving the
+// strategy later does not silently resurrect them.
 export async function archiveStrategy(strategyId: string) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { ok: false, error: 'unauthorized' as const }
 
+  const stratRes = await supabase
+    .from('strategies')
+    .select('name')
+    .eq('id', strategyId)
+    .maybeSingle()
+  if (stratRes.error) {
+    console.error('[archiveStrategy lookup]', stratRes.error)
+    return { ok: false, error: 'update_failed' as const }
+  }
+  if (!stratRes.data) return { ok: false, error: 'not_found' as const }
+  const name = stratRes.data.name
+
+  const now = new Date().toISOString()
+
   const { error } = await supabase
     .from('strategies')
-    .update({ archived_at: new Date().toISOString() })
+    .update({ archived_at: now })
     .eq('id', strategyId)
 
   if (error) {
@@ -78,8 +97,22 @@ export async function archiveStrategy(strategyId: string) {
     return { ok: false, error: 'update_failed' as const }
   }
 
+  let btUpdate = supabase
+    .from('backtests')
+    .update({ archived_at: now })
+    .is('archived_at', null)
+  btUpdate = name
+    ? btUpdate.or(`strategy_id.eq.${strategyId},strategy_name.eq.${name}`)
+    : btUpdate.eq('strategy_id', strategyId)
+  const btRes = await btUpdate
+  if (btRes.error) {
+    console.error('[archiveStrategy backtests]', btRes.error)
+    return { ok: false, error: 'update_failed' as const }
+  }
+
   revalidatePath('/strategies')
   revalidatePath(`/strategies/${strategyId}`)
+  revalidatePath('/backtests')
   return { ok: true as const }
 }
 
