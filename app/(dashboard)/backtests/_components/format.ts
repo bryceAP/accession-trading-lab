@@ -38,6 +38,42 @@ export function fmtInt(v: number | null | undefined): string {
   return Math.round(v).toLocaleString('en-US')
 }
 
+// Plain number with explicit +/− sign. Uses the unicode minus to match fmtUsd.
+// Used for beta / correlation cells where the sign carries meaning.
+export function fmtSignedNumber(v: number | null | undefined, digits = 2): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  const abs = Math.abs(v).toLocaleString('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+  if (v === 0) return `+${abs}`
+  return `${v >= 0 ? '+' : '−'}${abs}`
+}
+
+// Render a raw decimal as a signed percentage. Multiplies by 100 unconditionally
+// — alpha_daily lives on the strategy's daily return scale (decimal), so 0.0012
+// renders as "+0.1200%". Don't pass values that are already percent.
+export function fmtSignedPctRaw(v: number | null | undefined, digits = 2): string {
+  if (v == null || Number.isNaN(v)) return '—'
+  const pct = v * 100
+  const abs = Math.abs(pct).toLocaleString('en-US', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })
+  if (pct === 0) return `+${abs}%`
+  return `${pct >= 0 ? '+' : '−'}${abs}%`
+}
+
+// Beta color: red when |β| > 0.7 (closet long — strategy mostly riding ES),
+// green when |β| < 0.3 (genuinely uncorrelated), neutral in between.
+export function betaClass(v: number | null | undefined): string {
+  if (v == null || Number.isNaN(v)) return 'text-muted-foreground'
+  const a = Math.abs(v)
+  if (a > 0.7) return 'text-[var(--negative)]'
+  if (a < 0.3) return 'text-[var(--positive)]'
+  return ''
+}
+
 export function fmtDate(s: string | null | undefined): string {
   if (!s) return '—'
   const d = new Date(s)

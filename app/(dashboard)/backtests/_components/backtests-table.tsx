@@ -15,12 +15,15 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
+  betaClass,
   fmtDate,
   fmtDateTimeWithSeconds,
   fmtElapsed,
   fmtInt,
   fmtNumber,
   fmtPct,
+  fmtSignedNumber,
+  fmtSignedPctRaw,
   fmtUsd,
   pickMetric,
   pnlClass,
@@ -62,6 +65,12 @@ export type BacktestRow = {
   win_rate: number | null
   sharpe: number | null
   trades_count: number | null
+  // ES regression columns populated by migration 010's backfill. The runner
+  // regresses strategy daily returns on ES daily-close returns server-side;
+  // the frontend just renders the stored values.
+  beta_es: number | null
+  alpha_daily: number | null
+  corr_es: number | null
 }
 
 type SortKey =
@@ -69,6 +78,9 @@ type SortKey =
   | 'net_pnl'
   | 'win_rate'
   | 'sharpe'
+  | 'beta_es'
+  | 'alpha_daily'
+  | 'corr_es'
   | 'max_drawdown'
   | 'trades_count'
 
@@ -80,6 +92,9 @@ type Derived = {
   gross_pnl: number | null
   win_rate: number | null
   sharpe: number | null
+  beta_es: number | null
+  alpha_daily: number | null
+  corr_es: number | null
   max_drawdown: number | null
   trades_count: number | null
   configBadges: ConfigBadge[]
@@ -95,6 +110,9 @@ const SORT_OPTIONS: { key: SortKey; label: string; defaultDir: SortDir }[] = [
   { key: 'net_pnl',       label: 'Net P&L',    defaultDir: 'desc' },
   { key: 'win_rate',      label: 'Win rate',   defaultDir: 'desc' },
   { key: 'sharpe',        label: 'Sharpe',     defaultDir: 'desc' },
+  { key: 'beta_es',       label: 'β (ES)',     defaultDir: 'asc'  },
+  { key: 'alpha_daily',   label: 'α/day',      defaultDir: 'desc' },
+  { key: 'corr_es',       label: 'Corr (ES)',  defaultDir: 'asc'  },
   { key: 'max_drawdown',  label: 'Max DD',     defaultDir: 'asc'  },
   { key: 'trades_count',  label: 'Trades',     defaultDir: 'desc' },
 ]
@@ -121,6 +139,11 @@ function derive(row: BacktestRow): Derived {
     gross_pnl:     row.gross_pnl     ?? pickMetric(row.metrics, 'gross_pnl'),
     win_rate:      row.win_rate      ?? pickMetric(row.metrics, 'win_rate'),
     sharpe:        row.sharpe        ?? pickMetric(row.metrics, 'sharpe'),
+    // Migration 010 columns — no metrics fallback. Rows that predate the
+    // backfill render as '—' rather than guessing from jsonb.
+    beta_es:       row.beta_es,
+    alpha_daily:   row.alpha_daily,
+    corr_es:       row.corr_es,
     max_drawdown:  maxDdUsd,
     trades_count:  row.trades_count  ?? pickMetric(row.metrics, 'total_trades'),
     configBadges:  buildConfigBadges(input),
@@ -163,6 +186,11 @@ function getSortValue(d: Derived, key: SortKey): unknown {
     case 'net_pnl':       return d.net_pnl
     case 'win_rate':      return d.win_rate
     case 'sharpe':        return d.sharpe
+    // Sort beta and corr by absolute value so the "closet long" runs cluster
+    // together at one end regardless of sign — what matters is magnitude.
+    case 'beta_es':       return d.beta_es == null ? null : Math.abs(d.beta_es)
+    case 'alpha_daily':   return d.alpha_daily
+    case 'corr_es':       return d.corr_es == null ? null : Math.abs(d.corr_es)
     case 'max_drawdown':  return d.max_drawdown
     case 'trades_count':  return d.trades_count
   }
@@ -661,6 +689,9 @@ function RecentRunsSection({
               <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Win rate" k="win_rate"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="β (ES)"   k="beta_es"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="α/day"    k="alpha_daily"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Corr (ES)" k="corr_es"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -768,6 +799,9 @@ function StrategySection({
               <Th label="Net P&L"  k="net_pnl"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Win rate" k="win_rate"     sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Sharpe"   k="sharpe"        sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="β (ES)"   k="beta_es"       sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="α/day"    k="alpha_daily"   sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
+              <Th label="Corr (ES)" k="corr_es"      sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Max DD"   k="max_drawdown"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <Th label="Trades"   k="trades_count"  sortKey={sortKey} sortDir={sortDir} onSort={onSort} align="right" />
               <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -877,6 +911,11 @@ function BodyRow({
       </td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtPct(d.win_rate)}</td>
       <td className="px-3 py-2 text-right font-mono tabular-nums">{d.sharpe == null ? '—' : fmtNumber(d.sharpe, 2)}</td>
+      <td className={cn('px-3 py-2 text-right font-mono tabular-nums', betaClass(d.beta_es))}>
+        {fmtSignedNumber(d.beta_es, 4)}
+      </td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtSignedPctRaw(d.alpha_daily, 4)}</td>
+      <td className="px-3 py-2 text-right font-mono tabular-nums">{fmtSignedNumber(d.corr_es, 4)}</td>
       <td className={cn('px-3 py-2 text-right font-mono tabular-nums', d.max_drawdown != null && d.max_drawdown > 0 && 'text-[var(--negative)]')}>
         {d.max_drawdown == null ? '—' : d.max_drawdown === 0 ? fmtUsd(0) : `−${fmtUsd(d.max_drawdown)}`}
       </td>

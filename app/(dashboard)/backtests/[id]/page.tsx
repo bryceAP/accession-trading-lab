@@ -12,8 +12,11 @@ import { BacktestRowActions } from '../_components/delete-backtest'
 import { timeframeLabel } from '../_components/format'
 import {
   asNumber,
+  betaClass,
   fmtDate,
   fmtDateTime,
+  fmtSignedNumber,
+  fmtSignedPctRaw,
   fmtUsd,
   formatMetricValue,
   metricKind,
@@ -45,6 +48,11 @@ type Backtest = {
   archived_at: string | null
   // Optional runner-populated aggregate; falls back to client compute when absent.
   exit_breakdown: unknown
+  // ES regression columns (migration 010). Beta/corr are unitless; alpha is
+  // a daily decimal return. Populated by the Python runner.
+  beta_es: number | null
+  alpha_daily: number | null
+  corr_es: number | null
 }
 
 // Cap matches the /backtests/compare flow (current + 5 = 6 max). If <5 siblings
@@ -195,7 +203,7 @@ export default async function BacktestDetailPage({
   const [btRes, notesRes] = await Promise.all([
     supabase
       .from('backtests')
-      .select('id, strategy_id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve, exit_breakdown, config_snapshot, archived_at')
+      .select('id, strategy_id, strategy_name, label, instrument, timeframe, start_date, end_date, completed_at, metrics, equity_curve, exit_breakdown, config_snapshot, archived_at, beta_es, alpha_daily, corr_es')
       .eq('id', params.id)
       .maybeSingle(),
     supabase
@@ -409,6 +417,30 @@ export default async function BacktestDetailPage({
           </div>
         )}
       </section>
+
+      {/* ── ES regression ─────────────────────────────────────── */}
+      {(backtest.beta_es != null || backtest.alpha_daily != null || backtest.corr_es != null) && (
+        <section className="rounded border border-border bg-card p-4 space-y-3">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            ES regression
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <CostStat
+              label="β (vs ES)"
+              value={fmtSignedNumber(backtest.beta_es, 4)}
+              cls={betaClass(backtest.beta_es)}
+            />
+            <CostStat
+              label="α (daily)"
+              value={fmtSignedPctRaw(backtest.alpha_daily, 4)}
+            />
+            <CostStat
+              label="Corr (vs ES)"
+              value={fmtSignedNumber(backtest.corr_es, 4)}
+            />
+          </div>
+        </section>
+      )}
 
       {/* ── Trading costs ─────────────────────────────────────── */}
       {trades.length > 0 && (
