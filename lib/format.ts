@@ -9,9 +9,12 @@ import { formatInTimeZone } from 'date-fns-tz'
 // callers never need to know whether a given trade fell inside daylight saving.
 const TRADE_TZ = 'America/New_York'
 
+// Includes seconds so intra-minute fills are visible — stops that trip inside
+// the entry bar (common with --fill-tf 1m) would otherwise collapse to the
+// same HH:mm as the entry and look like zero-duration noise.
 export function fmtTradeTime(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return formatInTimeZone(iso, TRADE_TZ, 'yyyy-MM-dd HH:mm zzz')
+  return formatInTimeZone(iso, TRADE_TZ, 'yyyy-MM-dd HH:mm:ss zzz')
 }
 
 // Compact ET tooltip for chart timestamps (no seconds, no UTC offset noise).
