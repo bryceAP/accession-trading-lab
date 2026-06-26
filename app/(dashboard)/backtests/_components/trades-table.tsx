@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { fmtDateTime, fmtDuration, fmtUsd, pnlClass } from './format'
+import { fmtDuration, fmtUsd, pnlClass } from './format'
+import { fmtTradeTime } from '@/lib/format'
 import { ExitReasonBadge } from './exit-reason'
 
 export type Trade = {
@@ -106,8 +107,8 @@ export function TradesTable({ trades }: { trades: Trade[] }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-border bg-muted/30">
-            <Th label="Entry"       k="entry_ts"    sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-            <Th label="Exit"        k="exit_ts"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <Th label="Open (ET)"   k="entry_ts"    sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            <Th label="Close (ET)"  k="exit_ts"     sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <Th label="Side"        k="side"        sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
             <Th label="Entry px"    k="entry_price" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
             <Th label="Exit px"     k="exit_price"  sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
@@ -127,10 +128,10 @@ export function TradesTable({ trades }: { trades: Trade[] }) {
             return (
               <tr key={t.id} className="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
                 <td className="px-3 py-1.5 font-mono text-muted-foreground tabular-nums whitespace-nowrap">
-                  {fmtDateTime(t.entry_ts)}
+                  {fmtTradeTime(t.entry_ts)}
                 </td>
                 <td className="px-3 py-1.5 font-mono text-muted-foreground tabular-nums whitespace-nowrap">
-                  {fmtDateTime(t.exit_ts)}
+                  {fmtTradeTime(t.exit_ts)}
                 </td>
                 <td className={cn('px-3 py-1.5 font-mono uppercase text-[11px]', sideClass)}>
                   {t.side ?? '—'}

@@ -11,6 +11,7 @@ import {
 } from 'recharts'
 import type { EquityPoint } from './equity-chart'
 import { fmtPct, fmtUsd } from './format'
+import { fmtChartDateET, fmtChartTimeET } from '@/lib/format'
 
 function toMs(v: string | number): number {
   if (typeof v === 'number') return v
@@ -35,21 +36,14 @@ function buildDrawdown(curve: EquityPoint[]): DdPoint[] {
   })
 }
 
+// Render chart timestamps in America/New_York so drawdown peaks line up with
+// the ET bar timeline. zzz auto-resolves EDT vs EST per-date.
 function fmtDateAxis(ts: number): string {
-  const d = new Date(ts)
-  return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' })
+  return fmtChartDateET(ts)
 }
 
 function fmtDateTooltip(ts: number): string {
-  const d = new Date(ts)
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  return fmtChartTimeET(ts)
 }
 
 function fmtYAxis(v: number): string {

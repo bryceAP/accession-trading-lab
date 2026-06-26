@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { fmtUsd } from './format'
+import { fmtChartDateET, fmtChartTimeET } from '@/lib/format'
 
 export type EquityPoint = { ts: string | number; equity: number }
 
@@ -73,21 +74,15 @@ function mergeData(curve: EquityPoint[], trades: TradeMarker[]): MergedPoint[] {
   return points
 }
 
+// Chart x-axis ticks and tooltip render in America/New_York so timestamps
+// line up with the ET bar data the engine consumed (UTC ISOs in DB → ET on
+// the wire). zzz auto-resolves EDT vs EST per-date.
 function fmtDateAxis(ts: number): string {
-  const d = new Date(ts)
-  return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' })
+  return fmtChartDateET(ts)
 }
 
 function fmtDateTooltip(ts: number): string {
-  const d = new Date(ts)
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  return fmtChartTimeET(ts)
 }
 
 function fmtYAxis(v: number): string {

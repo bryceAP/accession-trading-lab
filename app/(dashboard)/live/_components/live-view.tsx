@@ -5,11 +5,11 @@ import { Radio } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import {
-  fmtDateTime,
   fmtUsd,
   pnlClass,
   relativeTime,
 } from '../../backtests/_components/format'
+import { fmtTradeTime } from '@/lib/format'
 import {
   eventStyle,
   eventSummary,
@@ -465,8 +465,8 @@ function TradesPanel({
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border bg-muted/30 text-[10px] uppercase tracking-widest text-muted-foreground">
-                <th className="px-3 py-2 text-left  font-semibold">Entry</th>
-                <th className="px-3 py-2 text-left  font-semibold">Exit</th>
+                <th className="px-3 py-2 text-left  font-semibold">Open (ET)</th>
+                <th className="px-3 py-2 text-left  font-semibold">Close (ET)</th>
                 <th className="px-3 py-2 text-left  font-semibold">Side</th>
                 <th className="px-3 py-2 text-right font-semibold">Qty</th>
                 <th className="px-3 py-2 text-right font-semibold">Entry px</th>
@@ -496,12 +496,12 @@ function TradesPanel({
                     )}
                   >
                     <td className="px-3 py-1.5 font-mono text-muted-foreground tabular-nums whitespace-nowrap">
-                      {fmtDateTime(t.entry_ts)}
+                      {fmtTradeTime(t.entry_ts)}
                     </td>
                     <td className="px-3 py-1.5 font-mono text-muted-foreground tabular-nums whitespace-nowrap">
                       {isOpen
                         ? <span className="text-[var(--warning)]">open</span>
-                        : fmtDateTime(t.exit_ts)}
+                        : fmtTradeTime(t.exit_ts)}
                     </td>
                     <td className={cn('px-3 py-1.5 font-mono uppercase text-[11px]', sideClass)}>
                       {t.side ?? '—'}
