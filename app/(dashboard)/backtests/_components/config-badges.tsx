@@ -12,6 +12,10 @@ export type ConfigSnapshot = {
   // Forward-compatible: runners can opt in by setting either flag explicitly,
   // or by writing `session_mode: 'ny_london'` instead of the boolean pair.
   ny_london_session?: boolean
+  // After the 2026-06-29 mes-algo fix, skip_asia_session=true means force-flat
+  // at 16:58 ET — i.e. NY + London + a sub-hour tail, not the old 19:00 ET
+  // behavior that left positions exposed past overnight margin.
+  skip_asia_session?: boolean
   session_mode?: string
   fill_bar_type?: string
   [k: string]: unknown
@@ -208,10 +212,15 @@ export function buildConfigBadges(input: ConfigBadgeInput): ConfigBadge[] {
   // ── session ──────────────────────────────────────────────────
   const sessionKind = sessionFacet(input)
   if (sessionKind === 'ny_london') {
+    // skip_asia_session is the more informative signal — surface the exact
+    // force-flat time when that's what triggered the NY+London classification.
+    const skipAsia = snap?.skip_asia_session === true
     out.push({
       key: 'session',
       label: 'NY + London',
-      title: 'session_mode: ny_london',
+      title: skipAsia
+        ? 'session: skip_asia_session (NY+London, 16:58 ET force-flat)'
+        : 'session_mode: ny_london',
       tone: 'accent',
     })
   } else if (sessionKind === 'ny') {
@@ -305,6 +314,7 @@ export function sessionFacet(input: ConfigBadgeInput): SessionKind {
     if (typeof snap.session_mode === 'string' && /ny[_\s\-+]?lon/i.test(snap.session_mode)) {
       return 'ny_london'
     }
+    if (snap.skip_asia_session === true) return 'ny_london'
     if (typeof snap.ny_session_only === 'boolean') {
       return snap.ny_session_only ? 'ny' : 'globex'
     }
