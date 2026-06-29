@@ -46,7 +46,7 @@ export type ConfigBadgeKey =
 const CHIP_WIDTH_CLS: Record<ConfigBadgeKey, string> = {
   stop:    'w-[44px]',
   tf:      'w-[44px]',
-  mode:    'w-[80px]',
+  mode:    'w-[110px]',
   session: 'w-[104px]',
   span:    'w-[44px]',
   fill_tf: 'w-[60px]',
@@ -57,6 +57,16 @@ const CHIP_WIDTH_CLS: Record<ConfigBadgeKey, string> = {
 // glance when scanning the list.
 const DEFAULT_STOP_PT = 4
 const DEFAULT_ENTRY_MODE = 'bar_close'
+
+// Display labels for entry_mode. The raw values (bar_close / band_touch) read
+// as the entry CONDITION (whether the bar closed past the band), but they
+// actually describe entry TIMING + order type — when the order fires and what
+// kind it is. These labels disambiguate without losing the raw value, which
+// stays in the tooltip for power users.
+const ENTRY_MODE_LABELS: Record<string, string> = {
+  bar_close:  '5m @ close',     // MARKET at signal-bar close
+  band_touch: '1m touch LIMIT', // LIMIT at band, intra-bar via fill-tf
+}
 
 export function parseConfigSnapshot(raw: unknown): ConfigSnapshot | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -203,7 +213,7 @@ export function buildConfigBadges(input: ConfigBadgeInput): ConfigBadge[] {
   if (mode) {
     out.push({
       key: 'mode',
-      label: mode,
+      label: ENTRY_MODE_LABELS[mode] ?? mode,
       title: `entry_mode: ${mode}`,
       tone: mode === DEFAULT_ENTRY_MODE ? 'default' : 'accent',
     })
