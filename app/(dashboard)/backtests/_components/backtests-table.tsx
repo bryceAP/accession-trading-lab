@@ -326,8 +326,11 @@ export function BacktestsTable({
 
   const timeframeOptions = useMemo(() => {
     // Canonical timeframes are always available so the user can filter for
-    // them even before any backtest at that bar size has been imported.
-    const set = new Set<string>(['1m', '3m', '15m', '1h'])
+    // them even before any backtest at that bar size has been imported. Any
+    // other timeframe coming in from data is unioned in below and sorted
+    // chronologically by timeframeMinutes — so a 30m / 4h / 1d run shows up
+    // in the right slot the moment it's loaded.
+    const set = new Set<string>(['1m', '3m', '5m', '15m', '1h'])
     for (const d of derived) if (d.row.timeframe) set.add(d.row.timeframe)
     return Array.from(set).sort((a, b) => {
       const av = timeframeMinutes(a)
