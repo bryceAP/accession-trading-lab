@@ -9,9 +9,15 @@ export type ConfigSnapshot = {
   stop_hard_points?: number | string
   entry_mode?: string
   ny_session_only?: boolean
+  // Forward-compatible: runners can opt in by setting either flag explicitly,
+  // or by writing `session_mode: 'ny_london'` instead of the boolean pair.
+  ny_london_session?: boolean
+  session_mode?: string
   fill_bar_type?: string
   [k: string]: unknown
 }
+
+export type SessionKind = 'ny' | 'globex' | 'ny_london'
 
 export type BadgeTone = 'default' | 'accent'
 
@@ -37,7 +43,7 @@ const CHIP_WIDTH_CLS: Record<ConfigBadgeKey, string> = {
   stop:    'w-[44px]',
   tf:      'w-[44px]',
   mode:    'w-[80px]',
-  session: 'w-[92px]',
+  session: 'w-[104px]',
   span:    'w-[44px]',
   fill_tf: 'w-[60px]',
 }
@@ -94,6 +100,16 @@ function nySessionFromLabel(label: string | null | undefined): boolean | null {
   if (!label) return null
   const lc = label.toLowerCase()
   if (/(^|[_\s\-])ny(_hours)?($|[_\s\-])/.test(lc)) return true
+  return null
+}
+
+// Detect the NY + London overlap session — used when the runner filters to
+// the combined Europe/US window instead of either standalone session.
+// Matches label conventions: _ny_lon_, _ny_london_, _nylondon_, _ny+lon_.
+function nyLondonFromLabel(label: string | null | undefined): boolean | null {
+  if (!label) return null
+  const lc = label.toLowerCase()
+  if (/(^|[_\s\-+])ny[_\s\-+]?lon(don)?($|[_\s\-+])/.test(lc)) return true
   return null
 }
 
@@ -190,23 +206,28 @@ export function buildConfigBadges(input: ConfigBadgeInput): ConfigBadge[] {
   }
 
   // ── session ──────────────────────────────────────────────────
-  let ny: boolean | null = null
-  if (snap && typeof snap.ny_session_only === 'boolean') ny = snap.ny_session_only
-  else ny = nySessionFromLabel(input.label)
-  if (ny != null) {
+  const sessionKind = sessionFacet(input)
+  if (sessionKind === 'ny_london') {
     out.push({
       key: 'session',
-      label: ny ? 'NY hours' : '23/5 Globex',
-      title: `ny_session_only: ${ny}`,
-      tone: ny ? 'accent' : 'default',
+      label: 'NY + London',
+      title: 'session_mode: ny_london',
+      tone: 'accent',
+    })
+  } else if (sessionKind === 'ny') {
+    out.push({
+      key: 'session',
+      label: 'NY hours',
+      title: 'ny_session_only: true',
+      tone: 'accent',
     })
   } else {
-    // No way to tell — assume the default Globex session rather than
-    // hiding the chip entirely. Keeps the column width steady across rows.
+    // Globex 23/5 — either explicitly false, or unknown (default assumption).
+    const explicit = snap && typeof snap.ny_session_only === 'boolean'
     out.push({
       key: 'session',
       label: '23/5 Globex',
-      title: 'ny_session_only: unknown (assumed Globex)',
+      title: explicit ? 'ny_session_only: false' : 'ny_session_only: unknown (assumed Globex)',
       tone: 'default',
     })
   }
@@ -275,13 +296,20 @@ export function ConfigBadges({
 }
 
 // Pull the session value as a derived filter facet. Returns 'ny' | 'globex'
-// for the purposes of the backtests list filter (item #4) — 'globex' covers
-// both explicit false and the unknown case, matching the chip behavior.
-export function sessionFacet(input: ConfigBadgeInput): 'ny' | 'globex' {
+// | 'ny_london' — 'globex' is the catch-all when nothing else is signalled.
+export function sessionFacet(input: ConfigBadgeInput): SessionKind {
   const snap = parseConfigSnapshot(input.config_snapshot)
-  if (snap && typeof snap.ny_session_only === 'boolean') {
-    return snap.ny_session_only ? 'ny' : 'globex'
+  // NY+London wins if explicitly signalled; otherwise NY-only; otherwise Globex.
+  if (snap) {
+    if (snap.ny_london_session === true) return 'ny_london'
+    if (typeof snap.session_mode === 'string' && /ny[_\s\-+]?lon/i.test(snap.session_mode)) {
+      return 'ny_london'
+    }
+    if (typeof snap.ny_session_only === 'boolean') {
+      return snap.ny_session_only ? 'ny' : 'globex'
+    }
   }
+  if (nyLondonFromLabel(input.label)) return 'ny_london'
   return nySessionFromLabel(input.label) ? 'ny' : 'globex'
 }
 

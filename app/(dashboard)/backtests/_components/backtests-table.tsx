@@ -36,6 +36,7 @@ import {
   spanBucket,
   spanSortKey,
   type ConfigBadge,
+  type SessionKind,
   type SpanBucket,
 } from './config-badges'
 import { StrategyLabel } from '@/components/strategy-label'
@@ -99,7 +100,7 @@ type Derived = {
   max_drawdown: number | null
   trades_count: number | null
   configBadges: ConfigBadge[]
-  session: 'ny' | 'globex'
+  session: SessionKind
   entry_mode: string | null
   span: SpanBucket | null
 }
@@ -214,7 +215,7 @@ function setOrUndef(s: Set<string>): string | undefined {
 type ParsedQuery = {
   strategies: Set<string>
   timeframes: Set<string>
-  session: 'all' | 'ny' | 'globex'
+  session: 'all' | SessionKind
   entryMode: 'all' | string
   span: 'all' | SpanBucket
   labelQ: string
@@ -230,7 +231,9 @@ function parseQuery(sp: URLSearchParams): ParsedQuery {
 
   const sessionRaw = sp.get('session') ?? 'all'
   const session: ParsedQuery['session'] =
-    sessionRaw === 'ny' || sessionRaw === 'globex' ? sessionRaw : 'all'
+    sessionRaw === 'ny' || sessionRaw === 'globex' || sessionRaw === 'ny_london'
+      ? sessionRaw
+      : 'all'
 
   const spanRaw = sp.get('span') ?? 'all'
   // Any non-empty string is a valid span bucket — the filter options are
@@ -322,7 +325,9 @@ export function BacktestsTable({
   }, [derived, resolveStrategy])
 
   const timeframeOptions = useMemo(() => {
-    const set = new Set<string>()
+    // Canonical timeframes are always available so the user can filter for
+    // them even before any backtest at that bar size has been imported.
+    const set = new Set<string>(['1m', '3m', '15m', '1h'])
     for (const d of derived) if (d.row.timeframe) set.add(d.row.timeframe)
     return Array.from(set).sort((a, b) => {
       const av = timeframeMinutes(a)
@@ -505,6 +510,7 @@ export function BacktestsTable({
             { value: 'all', label: 'All' },
             { value: 'globex', label: '23/5 Globex' },
             { value: 'ny', label: 'NY hours' },
+            { value: 'ny_london', label: 'NY + London' },
           ]}
           onChange={(v) => updateQuery({ session: v as ParsedQuery['session'] })}
         />
