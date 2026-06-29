@@ -10,7 +10,6 @@ import {
   FlaskConical,
   Radio,
   Activity,
-  TrendingUp,
   LogOut,
 } from 'lucide-react'
 
@@ -40,34 +39,45 @@ export function Sidebar() {
 
   return (
     <aside className="flex h-screen w-[200px] shrink-0 flex-col border-r border-border bg-[var(--sidebar)]">
-      {/* Branding */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-border bg-card">
-          <TrendingUp className="h-3 w-3" />
+      {/* Branding — A|P mark */}
+      <div className="flex items-center gap-2.5 border-b border-border px-4 py-3.5">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-border bg-card">
+          <span className="font-light text-[11px] tracking-[0.05em] text-foreground/90">
+            A<span className="mx-px text-foreground/50">|</span>P
+          </span>
         </div>
-        <span className="text-xs font-semibold tracking-tight leading-none">
+        <span className="text-[11px] font-normal leading-none tracking-tight">
           Accession<br />
-          <span className="font-normal text-muted-foreground">Trading Lab</span>
+          <span className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Trading Lab</span>
         </span>
       </div>
 
       {/* Nav */}
       <nav className="flex-1 px-2 py-3 space-y-0.5">
-        {navItems.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className={cn(
-              'flex items-center gap-2.5 rounded px-2 py-1.5 text-xs transition-colors',
-              isActive(href)
-                ? 'bg-[var(--sidebar-accent)] text-foreground font-medium'
-                : 'text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground'
-            )}
-          >
-            <Icon className="h-3.5 w-3.5 shrink-0" />
-            {label}
-          </Link>
-        ))}
+        {navItems.map(({ href, label, icon: Icon }) => {
+          const active = isActive(href)
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={cn(
+                'relative flex items-center gap-2.5 rounded px-2 py-1.5 text-xs transition-colors',
+                active
+                  ? 'bg-[var(--sidebar-accent)] text-foreground font-medium'
+                  : 'text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground'
+              )}
+            >
+              {active && (
+                <span
+                  aria-hidden
+                  className="absolute left-0 top-1/2 h-3 w-px -translate-y-1/2 bg-[var(--accent)]"
+                />
+              )}
+              <Icon className={cn('h-3.5 w-3.5 shrink-0', active && 'text-[var(--accent)]')} />
+              {label}
+            </Link>
+          )
+        })}
       </nav>
 
       {/* Sign out */}

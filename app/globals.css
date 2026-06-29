@@ -48,7 +48,7 @@
   --color-negative:               var(--negative);
   --color-warning:                var(--warning);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
 }
 
@@ -56,32 +56,33 @@
   :root {
     color-scheme: dark;
 
-    --background:                 oklch(0.09 0 0);
-    --foreground:                 oklch(0.93 0 0);
+    /* Accession Partners brand — warm dark palette with deep gold accent. */
+    --background:                 #131210;
+    --foreground:                 #FAF7F2;
 
-    --card:                       oklch(0.12 0 0);
-    --card-foreground:            oklch(0.93 0 0);
+    --card:                       #1E1A15;
+    --card-foreground:            #FAF7F2;
 
-    --popover:                    oklch(0.13 0 0);
-    --popover-foreground:         oklch(0.93 0 0);
+    --popover:                    #1E1A15;
+    --popover-foreground:         #FAF7F2;
 
-    --primary:                    oklch(0.93 0 0);
-    --primary-foreground:         oklch(0.12 0 0);
+    --primary:                    #FAF7F2;
+    --primary-foreground:         #131210;
 
-    --secondary:                  oklch(0.18 0 0);
-    --secondary-foreground:       oklch(0.93 0 0);
+    --secondary:                  #2C261E;
+    --secondary-foreground:       #FAF7F2;
 
-    --muted:                      oklch(0.15 0 0);
-    --muted-foreground:           oklch(0.52 0 0);
+    --muted:                      #1E1A15;
+    --muted-foreground:           #A89880;
 
-    --accent:                     oklch(0.18 0 0);
-    --accent-foreground:          oklch(0.93 0 0);
+    --accent:                     #9B7D4A;
+    --accent-foreground:          #FAF7F2;
 
     --destructive:                oklch(0.62 0.21 25);
 
-    --border:                     oklch(0.22 0 0);
-    --input:                      oklch(0.20 0 0);
-    --ring:                       oklch(0.45 0 0);
+    --border:                     rgba(250, 247, 242, 0.08);
+    --input:                      #2C261E;
+    --ring:                       #C4A46B;
 
     --chart-1:                    oklch(0.65 0.15 230);
     --chart-2:                    oklch(0.65 0.17 145);
@@ -91,18 +92,18 @@
 
     --radius:                     0.375rem;
 
-    --sidebar:                    oklch(0.10 0 0);
-    --sidebar-foreground:         oklch(0.93 0 0);
-    --sidebar-primary:            oklch(0.93 0 0);
-    --sidebar-primary-foreground: oklch(0.12 0 0);
-    --sidebar-accent:             oklch(0.16 0 0);
-    --sidebar-accent-foreground:  oklch(0.93 0 0);
-    --sidebar-border:             oklch(0.20 0 0);
-    --sidebar-ring:               oklch(0.45 0 0);
+    --sidebar:                    #131210;
+    --sidebar-foreground:         #FAF7F2;
+    --sidebar-primary:            #FAF7F2;
+    --sidebar-primary-foreground: #131210;
+    --sidebar-accent:             #2C261E;
+    --sidebar-accent-foreground:  #FAF7F2;
+    --sidebar-border:             rgba(250, 247, 242, 0.08);
+    --sidebar-ring:               #C4A46B;
 
     --positive:                   oklch(0.65 0.17 145);
     --negative:                   oklch(0.62 0.21 25);
-    --warning:                    oklch(0.75 0.15 80);
+    --warning:                    #C4A46B;
   }
 
   * {
@@ -117,6 +118,6 @@
   }
 
   html {
-    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
   }
 }

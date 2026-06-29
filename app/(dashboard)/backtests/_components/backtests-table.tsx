@@ -34,6 +34,7 @@ import {
   entryModeFacet,
   sessionFacet,
   spanBucket,
+  spanSortKey,
   type ConfigBadge,
   type SpanBucket,
 } from './config-badges'
@@ -232,10 +233,9 @@ function parseQuery(sp: URLSearchParams): ParsedQuery {
     sessionRaw === 'ny' || sessionRaw === 'globex' ? sessionRaw : 'all'
 
   const spanRaw = sp.get('span') ?? 'all'
-  const span: ParsedQuery['span'] =
-    spanRaw === '5wk' || spanRaw === '1yr' || spanRaw === '4yr' || spanRaw === '10yr' || spanRaw === 'other'
-      ? spanRaw
-      : 'all'
+  // Any non-empty string is a valid span bucket — the filter options are
+  // derived from data, not from a fixed enum.
+  const span: ParsedQuery['span'] = spanRaw ? spanRaw : 'all'
 
   return {
     strategies: parseSet(sp.get('strategy')),
@@ -336,6 +336,17 @@ export function BacktestsTable({
     const set = new Set<string>()
     for (const d of derived) if (d.entry_mode) set.add(d.entry_mode)
     return Array.from(set).sort()
+  }, [derived])
+
+  const spanBucketOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const d of derived) if (d.span) set.add(d.span)
+    return Array.from(set).sort((a, b) => {
+      const av = spanSortKey(a)
+      const bv = spanSortKey(b)
+      if (av !== bv) return av - bv
+      return a.localeCompare(b)
+    })
   }, [derived])
 
   const filtered = useMemo(() => {
@@ -497,7 +508,7 @@ export function BacktestsTable({
           ]}
           onChange={(v) => updateQuery({ session: v as ParsedQuery['session'] })}
         />
-        {entryModeOptions.length > 0 && (
+        {entryModeOptions.length > 1 && (
           <FacetSingle
             label="Entry"
             value={q.entryMode}
@@ -508,19 +519,17 @@ export function BacktestsTable({
             onChange={(v) => updateQuery({ entryMode: v })}
           />
         )}
-        <FacetSingle
-          label="Span"
-          value={q.span}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: '5wk', label: '5wk' },
-            { value: '1yr', label: '1yr' },
-            { value: '4yr', label: '4yr' },
-            { value: '10yr', label: '10yr' },
-            { value: 'other', label: 'Other' },
-          ]}
-          onChange={(v) => updateQuery({ span: v as ParsedQuery['span'] })}
-        />
+        {spanBucketOptions.length > 1 && (
+          <FacetSingle
+            label="Span"
+            value={q.span}
+            options={[
+              { value: 'all', label: 'All' },
+              ...spanBucketOptions.map((s) => ({ value: s, label: s })),
+            ]}
+            onChange={(v) => updateQuery({ span: v as ParsedQuery['span'] })}
+          />
+        )}
         <LabelSearch value={q.labelQ} onChange={(v) => updateQuery({ labelQ: v })} />
         <div className="ml-auto flex items-center gap-3">
           <SortControl

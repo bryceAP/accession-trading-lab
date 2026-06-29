@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
+import { Figtree } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
+const figtree = Figtree({
+  subsets: ["latin"],
+  weight: ["300", "400", "500"],
+  variable: "--font-figtree",
+  display: "swap",
 });
 const geistMono = localFont({
   src: "./fonts/GeistMonoVF.woff",
@@ -24,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`dark ${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`dark ${figtree.variable} ${geistMono.variable}`}>
       <body className="antialiased">{children}</body>
     </html>
   );

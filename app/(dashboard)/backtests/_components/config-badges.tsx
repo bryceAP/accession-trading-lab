@@ -291,14 +291,22 @@ export function entryModeFacet(input: ConfigBadgeInput): string | null {
   return m
 }
 
-// Bucketed span keys for the filter dropdown — same buckets the chip emits.
-export type SpanBucket = '5wk' | '1yr' | '4yr' | '10yr' | 'other'
+// Bucketed span keys for the filter dropdown — the bucket is just the same
+// human-readable label the chip displays (e.g. "5wk", "10mo", "1yr", "18yr"),
+// so the filter options always match what's actually in the data.
+export type SpanBucket = string
 export function spanBucket(start: string | null, end: string | null): SpanBucket | null {
-  const label = formatSpan(start, end)
-  if (!label) return null
-  if (label === '1yr') return '1yr'
-  if (label === '4yr') return '4yr'
-  if (label === '10yr') return '10yr'
-  if (label.endsWith('wk')) return '5wk'
-  return 'other'
+  return formatSpan(start, end)
+}
+
+// Sort key for span labels so the dropdown lists shortest → longest.
+// Returns approximate day count; -1 for unparseable labels.
+export function spanSortKey(label: string): number {
+  const wk = label.match(/^(\d+)wk$/)
+  if (wk) return parseInt(wk[1], 10) * 7
+  const mo = label.match(/^(\d+)mo$/)
+  if (mo) return parseInt(mo[1], 10) * 30
+  const yr = label.match(/^(\d+)yr$/)
+  if (yr) return parseInt(yr[1], 10) * 365
+  return -1
 }
