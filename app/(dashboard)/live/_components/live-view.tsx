@@ -61,35 +61,34 @@ export type LiveEvent = {
 
 // ── Derived helpers ───────────────────────────────────────────────────────
 
-// paper_status.last_heartbeat is updated once per closed 5m bar in flat
-// markets (paper.py: every 5th 1m bar). A 2-min FRESH window false-flagged
-// stale-yellow for ~3 of every 5 minutes. 390s = 5min + 90s jitter buffer.
-const HEARTBEAT_FRESH_MS = 390 * 1000           // < 6.5 min: connected
-const HEARTBEAT_STALE_MS = 10 * 60 * 1000       // 6.5–10 min: stale; > 10 min: disconnected
+// The heartbeat pill is **heartbeat-only**. paper_status updates every closed
+// 5m bar (~300s cadence), so > 390s = one missed bar past expected → "runner
+// may be dead". A previous version also flipped on `connection_state` from
+// the column, but that conflates two different concerns:
+//   - `connection_state` reflects what the runner thinks of its IB session
+//     (it can be 'disconnected' while the runner itself is still alive and
+//     emitting heartbeats — IB drop with the process running).
+//   - heartbeat staleness reflects whether we've heard from the runner at all.
+// They're surfaced as separate elements now: the pill below, and a small
+// RunnerStateBadge that prints the column value literally.
+const STALE_MS = 390 * 1000
 
-type ConnectionState = 'connected' | 'stale' | 'disconnected' | 'stopped' | 'idle'
+type ConnectionState = 'live' | 'stale' | 'stopped' | 'idle'
 
 function connectionState(ps: LivePaperStatus | null, nowMs: number): ConnectionState {
   if (!ps) return 'idle'
   if (!ps.is_running) return 'stopped'
-  // Explicit signal from the runner trumps heartbeat-age inference: the runner
-  // sets connection_state='disconnected' inside the IB-gateway failure path
-  // before the heartbeat goes stale, so trust it when set.
-  if (ps.connection_state === 'disconnected') return 'disconnected'
-  if (ps.connection_state === 'stopped') return 'stopped'
-  if (!ps.last_heartbeat) return 'disconnected'
+  if (!ps.last_heartbeat) return 'stale'
   const age = nowMs - new Date(ps.last_heartbeat).getTime()
-  if (Number.isNaN(age) || age >= HEARTBEAT_STALE_MS) return 'disconnected'
-  if (age >= HEARTBEAT_FRESH_MS) return 'stale'
-  return 'connected'
+  if (!Number.isFinite(age) || age >= STALE_MS) return 'stale'
+  return 'live'
 }
 
 const CONNECTION_STYLES: Record<ConnectionState, { label: string; cls: string; dot: string }> = {
-  connected:    { label: 'Connected',    cls: 'border-[var(--positive)]/30 text-[var(--positive)] bg-[var(--positive)]/10', dot: 'bg-[var(--positive)] animate-pulse' },
-  stale:        { label: 'Stale',        cls: 'border-[var(--warning)]/30 text-[var(--warning)] bg-[var(--warning)]/10',   dot: 'bg-[var(--warning)]' },
-  disconnected: { label: 'Disconnected', cls: 'border-[var(--negative)]/30 text-[var(--negative)] bg-[var(--negative)]/10', dot: 'bg-[var(--negative)]' },
-  stopped:      { label: 'Stopped',      cls: 'border-border text-muted-foreground bg-muted/40', dot: 'bg-muted-foreground/40' },
-  idle:         { label: 'No session',   cls: 'border-border text-muted-foreground bg-muted/40', dot: 'bg-muted-foreground/30' },
+  live:    { label: 'Live',                       cls: 'border-[var(--positive)]/30 text-[var(--positive)] bg-[var(--positive)]/10', dot: 'bg-[var(--positive)] animate-pulse' },
+  stale:   { label: 'Stale — runner may be dead', cls: 'border-[var(--negative)]/30 text-[var(--negative)] bg-[var(--negative)]/10', dot: 'bg-[var(--negative)]' },
+  stopped: { label: 'Stopped',                    cls: 'border-border text-muted-foreground bg-muted/40', dot: 'bg-muted-foreground/40' },
+  idle:    { label: 'No session',                 cls: 'border-border text-muted-foreground bg-muted/40', dot: 'bg-muted-foreground/30' },
 }
 
 function isSessionInactive(ps: LivePaperStatus | null, tradesCount: number): boolean {
@@ -402,6 +401,7 @@ function StatusPanel({
 
         <div className="flex items-center gap-2">
           <RealtimePip state={rtState} />
+          <RunnerStateBadge state={status?.connection_state ?? null} />
           <span
             className={cn(
               'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest',
@@ -893,6 +893,30 @@ type RealtimeChannelStates = {
   status: ChannelStatus
   trades: ChannelStatus
   events: ChannelStatus
+}
+
+// Surfaces paper_status.connection_state literally, separate from the pill's
+// heartbeat freshness. Lets the user see "runner says CONNECTED but pill
+// shows STALE" → runner is wedged / not pushing — vs "runner says
+// DISCONNECTED but pill shows LIVE" → IB drop with the process still alive.
+function RunnerStateBadge({ state }: { state: LivePaperStatus['connection_state'] }) {
+  const label = (state ?? 'unknown').toUpperCase()
+  const cls =
+    state === 'connected'
+      ? 'text-[var(--positive)]'
+      : state === 'disconnected'
+        ? 'text-[var(--negative)]'
+        : state === 'stopped'
+          ? 'text-muted-foreground'
+          : 'text-muted-foreground/60'
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-muted-foreground"
+      title="paper_status.connection_state (what the runner reports about its IB session)"
+    >
+      runner:&nbsp;<span className={cls}>{label}</span>
+    </span>
+  )
 }
 
 function RealtimePip({ state }: { state: RealtimeChannelStates }) {
