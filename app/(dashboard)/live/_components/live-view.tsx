@@ -25,8 +25,13 @@ export type LivePaperStatus = {
   is_running: boolean | null
   started_at: string | null
   last_heartbeat: string | null
+  connection_state: 'connected' | 'stopped' | 'disconnected' | null
+  instrument: string | null
+  position_side: 'LONG' | 'SHORT' | 'FLAT' | null
   position_qty: number | null
   position_avg_price: number | null
+  current_price: number | null
+  unrealized_pnl: number | null
   daily_pnl: number | null
   updated_at: string | null
 }
@@ -64,6 +69,11 @@ type ConnectionState = 'connected' | 'stale' | 'disconnected' | 'stopped' | 'idl
 function connectionState(ps: LivePaperStatus | null, nowMs: number): ConnectionState {
   if (!ps) return 'idle'
   if (!ps.is_running) return 'stopped'
+  // Explicit signal from the runner trumps heartbeat-age inference: the runner
+  // sets connection_state='disconnected' inside the IB-gateway failure path
+  // before the heartbeat goes stale, so trust it when set.
+  if (ps.connection_state === 'disconnected') return 'disconnected'
+  if (ps.connection_state === 'stopped') return 'stopped'
   if (!ps.last_heartbeat) return 'disconnected'
   const age = nowMs - new Date(ps.last_heartbeat).getTime()
   if (Number.isNaN(age) || age >= HEARTBEAT_STALE_MS) return 'disconnected'
@@ -221,10 +231,16 @@ export function LiveView({
   // ── Inferred / derived state ─────────────────────────────────
   const conn = connectionState(status, now)
   const positionQty = status?.position_qty ?? 0
-  const hasPosition = positionQty !== 0
-  // No instrument column on paper_status — derive from the most recent paper/
-  // live trade as a best effort.
-  const inferredInstrument = trades.find((t) => t.instrument)?.instrument ?? null
+  // position_side is the runner's authoritative answer; fall back to qty sign
+  // so a missing side on an old row still renders correctly.
+  const positionSide: 'LONG' | 'SHORT' | 'FLAT' =
+    status?.position_side ??
+    (positionQty > 0 ? 'LONG' : positionQty < 0 ? 'SHORT' : 'FLAT')
+  const hasPosition = positionSide !== 'FLAT' && positionQty !== 0
+  // Prefer paper_status.instrument; fall back to the most recent paper/live
+  // trade when the column is null (older paper_status rows pre-migration).
+  const inferredInstrument =
+    status?.instrument ?? trades.find((t) => t.instrument)?.instrument ?? null
 
   // session realized P&L: paper_status.daily_pnl is the writer-maintained
   // value. Fall back to summing today's trades if it's missing.
@@ -240,6 +256,7 @@ export function LiveView({
         conn={conn}
         hasPosition={hasPosition}
         positionQty={positionQty}
+        positionSide={positionSide}
         inferredInstrument={inferredInstrument}
         sessionPnl={sessionPnl}
         now={now}
@@ -276,6 +293,7 @@ function StatusPanel({
   conn,
   hasPosition,
   positionQty,
+  positionSide,
   inferredInstrument,
   sessionPnl,
   now,
@@ -285,6 +303,7 @@ function StatusPanel({
   conn: ConnectionState
   hasPosition: boolean
   positionQty: number
+  positionSide: 'LONG' | 'SHORT' | 'FLAT'
   inferredInstrument: string | null
   sessionPnl: number | null
   now: number
@@ -358,8 +377,8 @@ function StatusPanel({
           value={
             hasPosition
               ? <span className="text-base">
-                  <span className={positionQty > 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}>
-                    {positionQty > 0 ? 'Long' : 'Short'}
+                  <span className={positionSide === 'LONG' ? 'text-[var(--positive)]' : 'text-[var(--negative)]'}>
+                    {positionSide === 'LONG' ? 'Long' : 'Short'}
                   </span>{' '}
                   {Math.abs(positionQty)}
                 </span>
@@ -375,13 +394,25 @@ function StatusPanel({
         />
         <StatCard
           label="Current price"
-          value={<span className="text-base text-muted-foreground">—</span>}
-          sub="not tracked"
+          value={
+            status?.current_price == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className="text-base">
+                  {Number(status.current_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+          }
+          sub={status?.current_price == null ? 'awaiting bar' : 'last close'}
         />
         <StatCard
           label="Unrealized P&L"
-          value={<span className="text-base text-muted-foreground">—</span>}
-          sub="needs current price"
+          value={
+            status?.unrealized_pnl == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className={cn('text-base', pnlClass(status.unrealized_pnl))}>
+                  {fmtUsd(status.unrealized_pnl, { signed: true })}
+                </span>
+          }
+          sub={!hasPosition ? 'flat' : undefined}
         />
         <StatCard
           label="Session realized P&L"

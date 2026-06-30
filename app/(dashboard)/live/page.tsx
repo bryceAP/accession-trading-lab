@@ -16,7 +16,11 @@ export default async function LivePage() {
   const [statusRes, tradesRes, eventsRes] = await Promise.all([
     supabase
       .from('paper_status')
-      .select('id, strategy_name, is_running, started_at, last_heartbeat, position_qty, position_avg_price, daily_pnl, updated_at')
+      .select(
+        'id, strategy_name, is_running, started_at, last_heartbeat, ' +
+        'connection_state, instrument, position_side, position_qty, ' +
+        'position_avg_price, current_price, unrealized_pnl, daily_pnl, updated_at'
+      )
       .eq('id', 1)
       .maybeSingle(),
     supabase
