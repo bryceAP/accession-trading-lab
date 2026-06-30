@@ -61,8 +61,11 @@ export type LiveEvent = {
 
 // ── Derived helpers ───────────────────────────────────────────────────────
 
-const HEARTBEAT_FRESH_MS = 2 * 60 * 1000        // < 2 min: connected
-const HEARTBEAT_STALE_MS = 10 * 60 * 1000       // 2–10 min: stale; > 10 min: disconnected
+// paper_status.last_heartbeat is updated once per closed 5m bar in flat
+// markets (paper.py: every 5th 1m bar). A 2-min FRESH window false-flagged
+// stale-yellow for ~3 of every 5 minutes. 390s = 5min + 90s jitter buffer.
+const HEARTBEAT_FRESH_MS = 390 * 1000           // < 6.5 min: connected
+const HEARTBEAT_STALE_MS = 10 * 60 * 1000       // 6.5–10 min: stale; > 10 min: disconnected
 
 type ConnectionState = 'connected' | 'stale' | 'disconnected' | 'stopped' | 'idle'
 
