@@ -3,7 +3,9 @@ import { LiveView, type LivePaperStatus, type LiveTrade, type LiveEvent } from '
 
 const TRADE_LIMIT = 100
 const EVENT_LIMIT = 100
+const FILL_LOOKBACK_LIMIT = 500
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 
 export default async function LivePage() {
   const supabase = createClient()
@@ -12,8 +14,9 @@ export default async function LivePage() {
   // evening trades made in MT (America/Denver). For the dashboard's purposes
   // "last 24h" is what we want either way.
   const cutoffIso = new Date(Date.now() - TWENTY_FOUR_HOURS_MS).toISOString()
+  const fillsCutoffIso = new Date(Date.now() - SEVEN_DAYS_MS).toISOString()
 
-  const [statusRes, tradesRes, eventsRes] = await Promise.all([
+  const [statusRes, tradesRes, eventsRes, openPosRes, fillsRes] = await Promise.all([
     supabase
       .from('paper_status')
       .select(
@@ -37,6 +40,28 @@ export default async function LivePage() {
       .order('ts', { ascending: false })
       .order('id', { ascending: false })
       .limit(EVENT_LIMIT),
+    // Latest position_opened — used to anchor time-in-trade on the open
+    // position card. paper_status carries position_avg_price but not the
+    // opening timestamp, so we read it from the event log.
+    supabase
+      .from('events')
+      .select('id, ts, event_type, source, data')
+      .eq('source', 'paper')
+      .eq('event_type', 'position_opened')
+      .order('ts', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // 7-day rolling slippage corpus — drives both today's avg and the 7-day
+    // baseline on the SlippageStats panel. One query, client splits on the ET
+    // midnight boundary.
+    supabase
+      .from('events')
+      .select('id, ts, event_type, source, data')
+      .eq('source', 'paper')
+      .eq('event_type', 'order_filled')
+      .gte('ts', fillsCutoffIso)
+      .order('ts', { ascending: false })
+      .limit(FILL_LOOKBACK_LIMIT),
   ])
 
   // Per-query diagnostics: log row count and any error so we can tell apart
@@ -55,6 +80,15 @@ export default async function LivePage() {
     rows: eventsRes.data?.length ?? 0,
     error: eventsRes.error?.message ?? null,
   })
+  console.log('[Live] open position', {
+    found: openPosRes.data ? 1 : 0,
+    error: openPosRes.error?.message ?? null,
+  })
+  console.log('[Live] order_filled (last 7d)', {
+    rows: fillsRes.data?.length ?? 0,
+    error: fillsRes.error?.message ?? null,
+    cutoff: fillsCutoffIso,
+  })
 
   return (
     <div className="p-6 space-y-4 max-w-[1400px]">
@@ -67,6 +101,8 @@ export default async function LivePage() {
         initialStatus={(statusRes.data ?? null) as LivePaperStatus | null}
         initialTrades={(tradesRes.data ?? []) as LiveTrade[]}
         initialEvents={(eventsRes.data ?? []) as LiveEvent[]}
+        initialOpenPosition={(openPosRes.data ?? null) as LiveEvent | null}
+        initialFills={(fillsRes.data ?? []) as LiveEvent[]}
         statusError={statusRes.error?.message ?? null}
         tradesError={tradesRes.error?.message ?? null}
         eventsError={eventsRes.error?.message ?? null}

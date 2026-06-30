@@ -106,6 +106,8 @@ export function LiveView({
   initialStatus,
   initialTrades,
   initialEvents,
+  initialOpenPosition,
+  initialFills,
   statusError,
   tradesError,
   eventsError,
@@ -113,6 +115,8 @@ export function LiveView({
   initialStatus: LivePaperStatus | null
   initialTrades: LiveTrade[]
   initialEvents: LiveEvent[]
+  initialOpenPosition: LiveEvent | null
+  initialFills: LiveEvent[]
   statusError: string | null
   tradesError: string | null
   eventsError: string | null
@@ -122,8 +126,13 @@ export function LiveView({
   const [status, setStatus] = useState<LivePaperStatus | null>(initialStatus)
   const [trades, setTrades] = useState<LiveTrade[]>(initialTrades)
   const [events, setEvents] = useState<LiveEvent[]>(initialEvents)
+  const [openPosition, setOpenPosition] = useState<LiveEvent | null>(initialOpenPosition)
+  const [fills, setFills] = useState<LiveEvent[]>(initialFills)
   const [newTradeIds, setNewTradeIds] = useState<Set<string | number>>(new Set())
   const [newEventIds, setNewEventIds] = useState<Set<number>>(new Set())
+  const [rtState, setRtState] = useState<RealtimeChannelStates>({
+    status: 'CLOSED', trades: 'CLOSED', events: 'CLOSED',
+  })
 
   // Tick "now" once per second so relative timestamps and the connection
   // pill keep refreshing even when the writer hasn't pushed an update.
@@ -152,7 +161,7 @@ export function LiveView({
           setStatus(row)
         },
       )
-      .subscribe()
+      .subscribe((s) => setRtState((prev) => ({ ...prev, status: s })))
     return () => { supabase.removeChannel(ch) }
   }, [supabase])
 
@@ -194,7 +203,7 @@ export function LiveView({
           setTrades((prev) => prev.map((x) => (x.id === t.id ? t : x)))
         },
       )
-      .subscribe()
+      .subscribe((s) => setRtState((prev) => ({ ...prev, trades: s })))
     return () => { supabase.removeChannel(ch) }
   }, [supabase])
 
@@ -212,6 +221,21 @@ export function LiveView({
             if (prev.some((x) => x.id === ev.id)) return prev
             return [ev, ...prev]
           })
+          // Mirror the relevant subset into the open-position + fills feeds
+          // so the SL/TP card and slippage tracker stay in sync without an
+          // extra fetch round-trip.
+          if (ev.source === 'paper') {
+            if (ev.event_type === 'position_opened') {
+              setOpenPosition(ev)
+            } else if (ev.event_type === 'position_closed') {
+              setOpenPosition(null)
+            } else if (ev.event_type === 'order_filled') {
+              setFills((prev) => {
+                if (prev.some((x) => x.id === ev.id)) return prev
+                return [ev, ...prev]
+              })
+            }
+          }
           setNewEventIds((prev) => {
             const next = new Set(prev)
             next.add(ev.id)
@@ -227,7 +251,7 @@ export function LiveView({
           }, 2500)
         },
       )
-      .subscribe()
+      .subscribe((s) => setRtState((prev) => ({ ...prev, events: s })))
     return () => { supabase.removeChannel(ch) }
   }, [supabase])
 
@@ -264,11 +288,27 @@ export function LiveView({
         sessionPnl={sessionPnl}
         now={now}
         inactive={inactive}
+        rtState={rtState}
       />
+
+      {!inactive && <ScheduleCountdown now={now} />}
 
       {statusError && (
         <ErrorBanner label="paper_status" message={statusError} />
       )}
+
+      {!inactive && hasPosition && (
+        <OpenPositionCard
+          status={status}
+          openPosition={openPosition}
+          positionSide={positionSide}
+          positionQty={positionQty}
+          instrument={inferredInstrument}
+          now={now}
+        />
+      )}
+
+      {!inactive && <SlippageStats fills={fills} now={now} />}
 
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -301,6 +341,7 @@ function StatusPanel({
   sessionPnl,
   now,
   inactive,
+  rtState,
 }: {
   status: LivePaperStatus | null
   conn: ConnectionState
@@ -311,6 +352,7 @@ function StatusPanel({
   sessionPnl: number | null
   now: number
   inactive: boolean
+  rtState: RealtimeChannelStates
 }) {
   if (inactive) {
     return (
@@ -358,20 +400,23 @@ function StatusPanel({
           </div>
         </div>
 
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest',
-            connStyle.cls,
-          )}
-          title={
-            hbAge != null
-              ? `Heartbeat age: ${Math.round(hbAge / 1000)}s`
-              : undefined
-          }
-        >
-          <span className={cn('h-1.5 w-1.5 rounded-full', connStyle.dot)} />
-          {connStyle.label}
-        </span>
+        <div className="flex items-center gap-2">
+          <RealtimePip state={rtState} />
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest',
+              connStyle.cls,
+            )}
+            title={
+              hbAge != null
+                ? `Heartbeat age: ${Math.round(hbAge / 1000)}s`
+                : undefined
+            }
+          >
+            <span className={cn('h-1.5 w-1.5 rounded-full', connStyle.dot)} />
+            {connStyle.label}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -639,4 +684,341 @@ function EventsPanel({
       )}
     </section>
   )
+}
+
+// ── Open position card (SL/TP, time in trade, distance) ──────────────────
+
+// 5pt no-round stop is locked into band_tagging_current. If a strategy
+// override ships, this number will need to come from config/event payload.
+const STOP_POINTS = 5
+
+// $ per point for futures we trade. Falls back to ES if the instrument
+// string is unrecognized — surfacing dollar distances is informational, not
+// a hot path, so a sensible fallback is better than rendering "—".
+function pointValueForInstrument(instr: string | null | undefined): number {
+  if (!instr) return 50
+  const s = instr.toUpperCase()
+  if (s.startsWith('MES')) return 5
+  if (s.startsWith('ES')) return 50
+  if (s.startsWith('MNQ')) return 2
+  if (s.startsWith('NQ')) return 20
+  return 50
+}
+
+function OpenPositionCard({
+  status,
+  openPosition,
+  positionSide,
+  positionQty,
+  instrument,
+  now,
+}: {
+  status: LivePaperStatus | null
+  openPosition: LiveEvent | null
+  positionSide: 'LONG' | 'SHORT' | 'FLAT'
+  positionQty: number
+  instrument: string | null
+  now: number
+}) {
+  if (positionSide === 'FLAT') return null
+
+  // Prefer paper_status.position_avg_price (always present when a position is
+  // open) and fall back to the position_opened event for older rows.
+  const eventEntry =
+    openPosition?.data && typeof openPosition.data.entry_price === 'number'
+      ? (openPosition.data.entry_price as number)
+      : null
+  const entryPrice = status?.position_avg_price ?? eventEntry
+  const currentPrice = status?.current_price ?? null
+
+  // Only trust the event timestamp if it's >= session start — otherwise it's
+  // a stale position_opened from a prior session.
+  const eventTs = openPosition?.ts ? new Date(openPosition.ts).getTime() : null
+  const sessionStart = status?.started_at ? new Date(status.started_at).getTime() : null
+  const tradeOpenedAt =
+    eventTs != null && (sessionStart == null || eventTs >= sessionStart) ? eventTs : null
+
+  const sl = entryPrice == null
+    ? null
+    : positionSide === 'LONG' ? entryPrice - STOP_POINTS : entryPrice + STOP_POINTS
+
+  const ptValue = pointValueForInstrument(instrument)
+
+  const distToStop = currentPrice == null || sl == null
+    ? null
+    : positionSide === 'LONG' ? currentPrice - sl : sl - currentPrice
+  const distToStopDollars = distToStop == null ? null : distToStop * ptValue * Math.abs(positionQty)
+
+  const timeInTradeMs = tradeOpenedAt == null ? null : now - tradeOpenedAt
+
+  return (
+    <section className="rounded border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Open position
+        </h2>
+        <span className="text-[10px] text-muted-foreground font-mono">
+          {tradeOpenedAt != null ? `in trade ${humanDelta(timeInTradeMs ?? 0)}` : 'in trade —'}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard
+          label="Entry"
+          value={
+            entryPrice == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className="text-base">{fmtPx(entryPrice)}</span>
+          }
+          sub={
+            positionSide === 'LONG'
+              ? <span className="text-[var(--positive)]">long {Math.abs(positionQty)}</span>
+              : <span className="text-[var(--negative)]">short {Math.abs(positionQty)}</span>
+          }
+        />
+        <StatCard
+          label={`Stop loss (-${STOP_POINTS}pt)`}
+          value={
+            sl == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className="text-base text-[var(--negative)]">{fmtPx(sl)}</span>
+          }
+          sub={
+            distToStop == null
+              ? 'no current price'
+              : <>
+                  {fmtPxSigned(distToStop)} pt
+                  <span className="text-muted-foreground/60"> · </span>
+                  {fmtUsd(distToStopDollars, { signed: true })}
+                </>
+          }
+        />
+        <StatCard
+          label="Take profit"
+          value={<span className="text-base text-muted-foreground">midband ± 0.25</span>}
+          sub="tracking (not in paper_status)"
+        />
+        <StatCard
+          label="Current"
+          value={
+            currentPrice == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className="text-base">{fmtPx(currentPrice)}</span>
+          }
+          sub={tradeOpenedAt != null ? `opened ${fmtTradeTime(new Date(tradeOpenedAt).toISOString())}` : undefined}
+        />
+      </div>
+    </section>
+  )
+}
+
+// ── Slippage stats ───────────────────────────────────────────────────────
+
+function SlippageStats({ fills }: { fills: LiveEvent[]; now: number }) {
+  const todayStartMs = etTodayStartUtc().getTime()
+
+  let todaySum = 0
+  let todayN = 0
+  let weekSum = 0
+  let weekN = 0
+  for (const f of fills) {
+    const slip = numberFrom(f.data, 'slippage')
+    if (slip == null) continue
+    weekSum += Math.abs(slip)
+    weekN += 1
+    const ts = new Date(f.ts).getTime()
+    if (Number.isFinite(ts) && ts >= todayStartMs) {
+      todaySum += Math.abs(slip)
+      todayN += 1
+    }
+  }
+  const todayAvg = todayN > 0 ? todaySum / todayN : null
+  const weekAvg = weekN > 0 ? weekSum / weekN : null
+
+  // > $20/fill is the user's drift threshold ("if this stat drifts above
+  // $20/fill, that's a signal something's wrong"). Color the today value.
+  const driftCls = todayAvg != null && todayAvg > 20 ? 'text-[var(--negative)]' : ''
+
+  return (
+    <section className="rounded border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Slippage tracking
+        </h2>
+        <span className="text-[10px] text-muted-foreground font-mono">
+          drift threshold $20/fill
+        </span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <StatCard
+          label="Avg today"
+          value={
+            todayAvg == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className={cn('text-base', driftCls)}>{fmtUsd(todayAvg)}</span>
+          }
+          sub={todayN > 0 ? `${todayN} fill${todayN === 1 ? '' : 's'}` : 'no fills yet'}
+        />
+        <StatCard
+          label="Avg last 7d"
+          value={
+            weekAvg == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className="text-base">{fmtUsd(weekAvg)}</span>
+          }
+          sub={weekN > 0 ? `${weekN} fill${weekN === 1 ? '' : 's'}` : 'no fills yet'}
+        />
+        <StatCard
+          label="vs 7d baseline"
+          value={
+            todayAvg == null || weekAvg == null
+              ? <span className="text-base text-muted-foreground">—</span>
+              : <span className={cn('text-base', todayAvg > weekAvg ? 'text-[var(--warning)]' : 'text-[var(--positive)]')}>
+                  {todayAvg > weekAvg ? '+' : ''}{fmtUsd(todayAvg - weekAvg, { signed: true })}
+                </span>
+          }
+          sub="today minus 7-day avg"
+        />
+      </div>
+    </section>
+  )
+}
+
+// ── Realtime channel pip ──────────────────────────────────────────────────
+
+type ChannelStatus =
+  | 'SUBSCRIBED' | 'TIMED_OUT' | 'CHANNEL_ERROR' | 'CLOSED'
+  | string  // supabase-js types are loose; tolerate future values
+
+type RealtimeChannelStates = {
+  status: ChannelStatus
+  trades: ChannelStatus
+  events: ChannelStatus
+}
+
+function RealtimePip({ state }: { state: RealtimeChannelStates }) {
+  const values = [state.status, state.trades, state.events]
+  const allOk = values.every((s) => s === 'SUBSCRIBED')
+  const anyError = values.some((s) => s === 'CHANNEL_ERROR' || s === 'CLOSED')
+  const cls = allOk
+    ? 'bg-[var(--positive)]'
+    : anyError
+      ? 'bg-[var(--negative)]'
+      : 'bg-[var(--warning)]'
+  const label = allOk ? 'Realtime live' : anyError ? 'Realtime down' : 'Realtime connecting'
+  const detail = `status:${state.status} trades:${state.trades} events:${state.events}`
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-muted-foreground"
+      title={detail}
+    >
+      <span className={cn('h-1.5 w-1.5 rounded-full', cls)} />
+      RT
+      <span className="sr-only">{label}</span>
+    </span>
+  )
+}
+
+// ── Schedule countdown ────────────────────────────────────────────────────
+
+type ScheduleEntry = { etMin: number; label: string }
+
+// ET-anchored runner schedule. Sorted ascending by minute-of-day. Used to
+// compute the next transition and a countdown so a user glancing at the page
+// knows whether the runner is about to go quiet, force-flat, or wake back up.
+const SCHEDULE: ScheduleEntry[] = [
+  { etMin:  3 * 60 + 0,  label: 'Trading window opens' },
+  { etMin: 16 * 60 + 55, label: 'Force-flat' },
+  { etMin: 17 * 60 + 0,  label: 'Globex break' },
+  { etMin: 18 * 60 + 0,  label: 'Globex resume' },
+]
+
+function ScheduleCountdown({ now }: { now: number }) {
+  const etMins = etMinutesOfDay(now)
+  const next = SCHEDULE.find((s) => s.etMin > etMins) ?? SCHEDULE[0]
+  const minutesUntil = next.etMin > etMins
+    ? next.etMin - etMins
+    : (24 * 60 - etMins) + next.etMin
+  // Seconds resolution: pull from the now ticker for a 1Hz countdown.
+  const secondsInThisMin = Math.floor((now / 1000) % 60)
+  const secondsUntil = minutesUntil * 60 - secondsInThisMin
+
+  return (
+    <div className="rounded border border-border bg-card px-4 py-2 flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+      <span className="text-muted-foreground">Next transition</span>
+      <span>
+        <span className="text-foreground">{next.label}</span>
+        <span className="text-muted-foreground/60"> · </span>
+        <span className="text-foreground">in {humanDelta(secondsUntil * 1000)}</span>
+      </span>
+    </div>
+  )
+}
+
+// ── Format / time helpers ────────────────────────────────────────────────
+
+function fmtPx(n: number): string {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function fmtPxSigned(n: number): string {
+  const s = n >= 0 ? '+' : '-'
+  return s + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function numberFrom(data: Record<string, unknown> | null, key: string): number | null {
+  if (!data) return null
+  const v = data[key]
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function humanDelta(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) ms = 0
+  const totalSec = Math.floor(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
+
+// Minutes-to-add to a UTC instant to reach its America/New_York wall clock.
+// EST → -300, EDT → -240.
+function nyOffsetMinutes(date: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date)
+  const o: Record<string, string> = {}
+  for (const p of parts) o[p.type] = p.value
+  const nyAsUtc = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour, +o.minute, +o.second)
+  return Math.round((nyAsUtc - date.getTime()) / 60000)
+}
+
+function etMinutesOfDay(nowMs: number): number {
+  const now = new Date(nowMs)
+  const off = nyOffsetMinutes(now)
+  const ny = new Date(now.getTime() + off * 60000)
+  return ny.getUTCHours() * 60 + ny.getUTCMinutes()
+}
+
+// UTC instant for the most recent 00:00 America/New_York. DST-safe — the
+// offset is resolved at NY-midnight, not at "now".
+function etTodayStartUtc(): Date {
+  const now = new Date()
+  const offNow = nyOffsetMinutes(now)
+  const nyNow = new Date(now.getTime() + offNow * 60000)
+  const y = nyNow.getUTCFullYear()
+  const m = nyNow.getUTCMonth()
+  const d = nyNow.getUTCDate()
+  const naiveMidnightUtc = Date.UTC(y, m, d, 0, 0, 0)
+  const offAtMidnight = nyOffsetMinutes(new Date(naiveMidnightUtc))
+  return new Date(naiveMidnightUtc - offAtMidnight * 60000)
 }
