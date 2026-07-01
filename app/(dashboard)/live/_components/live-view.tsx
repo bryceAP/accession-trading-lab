@@ -307,7 +307,7 @@ export function LiveView({
         />
       )}
 
-      {!inactive && <SlippageStats fills={fills} now={now} />}
+      {!inactive && <SlippageStats fills={fills} />}
 
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -761,7 +761,7 @@ function OpenPositionCard({
           {tradeOpenedAt != null ? `in trade ${humanDelta(timeInTradeMs ?? 0)}` : 'in trade —'}
         </span>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <StatCard
           label="Entry"
           value={
@@ -793,11 +793,6 @@ function OpenPositionCard({
           }
         />
         <StatCard
-          label="Take profit"
-          value={<span className="text-base text-muted-foreground">midband ± 0.25</span>}
-          sub="tracking (not in paper_status)"
-        />
-        <StatCard
           label="Current"
           value={
             currentPrice == null
@@ -813,7 +808,7 @@ function OpenPositionCard({
 
 // ── Slippage stats ───────────────────────────────────────────────────────
 
-function SlippageStats({ fills }: { fills: LiveEvent[]; now: number }) {
+function SlippageStats({ fills }: { fills: LiveEvent[] }) {
   const todayStartMs = etTodayStartUtc().getTime()
 
   let todaySum = 0
