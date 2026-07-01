@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import {
@@ -21,9 +22,46 @@ const navItems = [
   { href: '/activity',    label: 'Activity',   icon: Activity        },
 ]
 
+// Kept in sync with /live's STALE_MS — runner heartbeats on 5m closes (~300s),
+// so one missed bar past expected = stale.
+const HEARTBEAT_STALE_MS = 390 * 1000
+const POLL_MS = 15 * 1000
+
+function useLiveIndicator() {
+  const [isLive, setIsLive] = useState(false)
+
+  useEffect(() => {
+    const supabase = createClient()
+    let cancelled = false
+
+    async function poll() {
+      const { data } = await supabase
+        .from('paper_status')
+        .select('is_running, last_heartbeat')
+        .eq('id', 1)
+        .maybeSingle()
+      if (cancelled) return
+      const running = data?.is_running === true
+      const hb = data?.last_heartbeat ? new Date(data.last_heartbeat).getTime() : null
+      const fresh = hb != null && Date.now() - hb < HEARTBEAT_STALE_MS
+      setIsLive(running && fresh)
+    }
+
+    poll()
+    const id = setInterval(poll, POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  return isLive
+}
+
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
+  const isLive = useLiveIndicator()
 
   async function handleSignOut() {
     const supabase = createClient()
@@ -74,7 +112,14 @@ export function Sidebar() {
                 />
               )}
               <Icon className={cn('h-3.5 w-3.5 shrink-0', active && 'text-[var(--accent)]')} />
-              {label}
+              <span className="flex-1">{label}</span>
+              {href === '/live' && isLive && (
+                <span
+                  aria-label="Live session active"
+                  title="Live session active"
+                  className="h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse shrink-0"
+                />
+              )}
             </Link>
           )
         })}
