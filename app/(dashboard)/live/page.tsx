@@ -5,8 +5,8 @@ import {
   type LiveTrade,
   type LiveEvent,
   type DrawdownPoint,
-  HONEST_DATA_CUTOFF_ISO,
 } from './_components/live-view'
+import { HONEST_DATA_CUTOFF_ISO } from './_components/constants'
 
 const TRADE_LIMIT = 200
 const EVENT_LIMIT = 100

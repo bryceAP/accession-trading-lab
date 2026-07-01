@@ -17,16 +17,9 @@ import {
   formatET,
   sourceStyle,
 } from '../../activity/_components/styles'
+import { HONEST_DATA_CUTOFF_ISO, PRE_CUTOFF_RECAP_USD } from './constants'
 
 // ── Constants ─────────────────────────────────────────────────────────────
-
-// Honest-data reset. Two trades before this timestamp have broken slippage /
-// PnL numbers (T1 was recorded with slippage=650, pnl=+387 when actual was
-// slippage≈0, pnl=-267; T2 never landed at all — clean-shutdown race).
-// See mes-algo runners/paper.py fixes on 2026-07-01. Everything below this
-// cutoff is filtered out at the query layer; the banner surfaces the recap.
-export const HONEST_DATA_CUTOFF_ISO = '2026-07-01T14:47:00Z'
-const PRE_CUTOFF_RECAP_USD = 1691
 
 // Runner writes paper_status on 5m closes (~300s cadence). > 390s = one
 // missed bar past expected → "runner may be dead".
