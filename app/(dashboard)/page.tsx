@@ -1,6 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 
+// Overview is a snapshot, not realtime. Revalidate on request so a browser
+// tab left open picks up new heartbeats without needing a hard reload. /live
+// carries the realtime feed.
+export const revalidate = 30
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type PaperStatus = {
@@ -8,6 +13,7 @@ type PaperStatus = {
   is_running: boolean
   started_at: string | null
   last_heartbeat: string | null
+  instrument: string | null
   position_qty: number | null
   position_avg_price: number | null
   daily_pnl: number | null
@@ -27,17 +33,17 @@ type OverviewEvent = {
 
 async function getOverviewData() {
   const supabase = createClient()
-  const now = new Date()
 
-  // UTC calendar boundaries
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  // ET calendar boundaries — matches the trading day. UTC boundaries drop
+  // evening ET trades into the wrong bucket.
+  const todayStart = etTodayStartUtc()
   const weekStart  = new Date(todayStart.getTime() - 6 * 24 * 60 * 60 * 1000)
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+  const monthStart = etMonthStartUtc()
 
   const [status, todayRes, weekRes, monthRes, eventsRes] = await Promise.all([
     supabase
       .from('paper_status')
-      .select('strategy_name, is_running, started_at, last_heartbeat, position_qty, position_avg_price, daily_pnl')
+      .select('strategy_name, is_running, started_at, last_heartbeat, instrument, position_qty, position_avg_price, daily_pnl')
       .eq('id', 1)
       .maybeSingle(),
     supabase.from('trades').select('pnl').eq('source', 'paper').not('exit_ts', 'is', null).gte('exit_ts', todayStart.toISOString()),
@@ -59,6 +65,46 @@ async function getOverviewData() {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────
+
+// Minutes-to-add to a UTC instant to reach its America/New_York wall clock.
+// EST → -300, EDT → -240. Mirrors the helper in /live's live-view.
+function nyOffsetMinutes(date: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date)
+  const o: Record<string, string> = {}
+  for (const p of parts) o[p.type] = p.value
+  const nyAsUtc = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour, +o.minute, +o.second)
+  return Math.round((nyAsUtc - date.getTime()) / 60000)
+}
+
+// UTC instant for the most recent 00:00 America/New_York. DST-safe — resolves
+// the offset at NY-midnight, not at "now".
+function etTodayStartUtc(): Date {
+  const now = new Date()
+  const offNow = nyOffsetMinutes(now)
+  const nyNow = new Date(now.getTime() + offNow * 60000)
+  const y = nyNow.getUTCFullYear()
+  const m = nyNow.getUTCMonth()
+  const d = nyNow.getUTCDate()
+  const naiveMidnightUtc = Date.UTC(y, m, d, 0, 0, 0)
+  const offAtMidnight = nyOffsetMinutes(new Date(naiveMidnightUtc))
+  return new Date(naiveMidnightUtc - offAtMidnight * 60000)
+}
+
+function etMonthStartUtc(): Date {
+  const now = new Date()
+  const offNow = nyOffsetMinutes(now)
+  const nyNow = new Date(now.getTime() + offNow * 60000)
+  const y = nyNow.getUTCFullYear()
+  const m = nyNow.getUTCMonth()
+  const naiveMonthStartUtc = Date.UTC(y, m, 1, 0, 0, 0)
+  const offAtBoundary = nyOffsetMinutes(new Date(naiveMonthStartUtc))
+  return new Date(naiveMonthStartUtc - offAtBoundary * 60000)
+}
 
 function relativeTime(date: Date): string {
   const s = Math.floor((Date.now() - date.getTime()) / 1000)
@@ -92,9 +138,13 @@ function sumPnl(trades: Trade[]): number {
   return trades.reduce((acc, t) => acc + (t.pnl ?? 0), 0)
 }
 
+// Runner writes paper_status on 5m bar closes (~300s cadence). 390s = one
+// missed bar past expected. Kept in sync with /live's STALE_MS.
+const HEARTBEAT_STALE_MS = 390 * 1000
+
 function isHeartbeatFresh(ts: string | null): boolean {
   if (!ts) return false
-  return Date.now() - new Date(ts).getTime() < 2 * 60 * 1000
+  return Date.now() - new Date(ts).getTime() < HEARTBEAT_STALE_MS
 }
 
 function eventSummary(type: string, data: Record<string, unknown>): string {
@@ -230,7 +280,7 @@ export default async function OverviewPage() {
       ? <span className="text-base text-muted-foreground">Flat</span>
       : <span className="text-base">{qty > 0 ? 'Long' : 'Short'} {Math.abs(qty)}</span>
   const posSub = qty !== 0 && avgPrice != null
-    ? `MES @ ${Number(avgPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    ? `${paperStatus?.instrument ?? '—'} @ ${Number(avgPrice).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : undefined
 
   return (
