@@ -389,7 +389,7 @@ export function LiveView({
   const inferredInstrument =
     status?.instrument ?? trades.find((t) => t.instrument)?.instrument ?? null
 
-  // ── Running P&L tally ────────────────────────────────────────
+  // ── Running P&L + commissions tally ─────────────────────────
   const runningTally = useMemo(() => {
     const cutoff24h = now - TWENTY_FOUR_HOURS_MS
     const sessionStart = status?.started_at ? new Date(status.started_at).getTime() : null
@@ -397,16 +397,21 @@ export function LiveView({
     let realizedSession: number | null = sessionStart == null ? null : 0
     let closedCount24h = 0
     let closedCountSession = 0
+    let commissions24h = 0
+    let commissionsSession: number | null = sessionStart == null ? null : 0
     for (const t of trades) {
       if (!t.exit_ts) continue
       const exitMs = new Date(t.exit_ts).getTime()
       const pnl = n(t.pnl)
+      const comm = n(t.commission)
       if (exitMs >= cutoff24h) {
         realized24h += pnl
         closedCount24h += 1
+        commissions24h += comm
       }
       if (sessionStart != null && exitMs >= sessionStart) {
         realizedSession = (realizedSession ?? 0) + pnl
+        commissionsSession = (commissionsSession ?? 0) + comm
         closedCountSession += 1
       }
     }
@@ -415,6 +420,8 @@ export function LiveView({
       realizedSession,
       closedCount24h,
       closedCountSession,
+      commissions24h,
+      commissionsSession,
       unrealized: nOrNull(status?.unrealized_pnl),
     }
   }, [trades, status?.started_at, status?.unrealized_pnl, now])
@@ -453,6 +460,21 @@ export function LiveView({
         <RealtimeDownNudge downSeconds={Math.floor(rtDownDuration / 1000)} />
       )}
 
+      {!inactive && (
+        <SummaryStrip
+          realized24h={runningTally.realized24h}
+          realizedSession={runningTally.realizedSession}
+          unrealized={runningTally.unrealized}
+          closedCount24h={runningTally.closedCount24h}
+          closedCountSession={runningTally.closedCountSession}
+          commissions24h={runningTally.commissions24h}
+          commissionsSession={runningTally.commissionsSession}
+          drawdown={drawdown}
+          hasPosition={hasPosition}
+          sessionStart={status?.started_at ?? null}
+        />
+      )}
+
       <StatusPanel
         status={status}
         conn={conn}
@@ -465,11 +487,13 @@ export function LiveView({
         rtHealth={rtHealth}
       />
 
-      {!inactive && <ScheduleCountdown now={now} />}
-
       {statusError && (
         <ErrorBanner label="paper_status" message={statusError} />
       )}
+
+      {!inactive && <HonestDataBanner />}
+
+      {!inactive && <ScheduleCountdown now={now} />}
 
       {!inactive && hasPosition && (
         <OpenPositionCard
@@ -482,24 +506,7 @@ export function LiveView({
         />
       )}
 
-      {!inactive && (
-        <RunningTallyPanel
-          realized24h={runningTally.realized24h}
-          realizedSession={runningTally.realizedSession}
-          unrealized={runningTally.unrealized}
-          closedCount24h={runningTally.closedCount24h}
-          closedCountSession={runningTally.closedCountSession}
-          sessionStart={status?.started_at ?? null}
-          hasPosition={hasPosition}
-          now={now}
-        />
-      )}
-
-      {!inactive && <DrawdownPanel drawdown={drawdown} />}
-
       {!inactive && <SlippagePanel stats={slippage} />}
-
-      {!inactive && <HonestDataBanner />}
 
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -717,94 +724,140 @@ function StatCard({
   )
 }
 
-// ── Running P&L tally ─────────────────────────────────────────────────────
+// ── Compact top summary strip ─────────────────────────────────────────────
 
-function RunningTallyPanel({
+// One-row glance: 24h P&L, session P&L, drawdown, commissions. Values render
+// at `text-lg` — big enough to read at a glance but not dominant like the
+// old panels. Info that used to live in RunningTallyPanel / DrawdownPanel is
+// folded into the sub-lines instead of taking three separate sections.
+function SummaryStrip({
   realized24h,
   realizedSession,
   unrealized,
   closedCount24h,
   closedCountSession,
-  sessionStart,
+  commissions24h,
+  commissionsSession,
+  drawdown,
   hasPosition,
-  now,
+  sessionStart,
 }: {
   realized24h: number
   realizedSession: number | null
   unrealized: number | null
   closedCount24h: number
   closedCountSession: number
-  sessionStart: string | null
+  commissions24h: number
+  commissionsSession: number | null
+  drawdown: DrawdownStats
   hasPosition: boolean
-  now: number
+  sessionStart: string | null
 }) {
   const sessionStartDate = sessionStart ? new Date(sessionStart) : null
-  const sessionAge = sessionStartDate ? now - sessionStartDate.getTime() : null
+  const noDdData = drawdown.pointsInWindow30d === 0
+  const avgCommission24h = closedCount24h > 0 ? commissions24h / closedCount24h : null
+
   return (
-    <section className="rounded border border-border bg-card p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Running P&amp;L
-        </h2>
-        <span className="text-[10px] text-muted-foreground font-mono">
-          net of commission · live
-        </span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <BigStat
-          label="24h realized"
-          value={realized24h}
-          count={closedCount24h}
-          sub={closedCount24h === 1 ? '1 closed trade' : `${closedCount24h} closed trades`}
-        />
-        <BigStat
-          label="Session realized"
-          value={realizedSession}
-          count={closedCountSession}
-          sub={
-            sessionStartDate
-              ? `since ${relativeTime(sessionStartDate)}${sessionAge != null ? ` · ${humanDelta(sessionAge)}` : ''}`
-              : 'no session start recorded'
-          }
-        />
-        <BigStat
-          label="Unrealized"
-          value={unrealized}
-          sub={hasPosition ? 'open position' : 'flat'}
-          muteIfNull
-        />
-      </div>
+    <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {/* 24h P&L — value is realized; unrealized (if position open) hangs
+          below as an "open position" delta so the strip stays 4 cells. */}
+      <StripStat
+        label="24h P&L"
+        value={fmtUsd(realized24h, { signed: true })}
+        valueClass={pnlClass(realized24h)}
+        sub={
+          hasPosition && unrealized != null
+            ? <>
+                {closedCount24h} closed
+                <span className="text-muted-foreground/60"> · </span>
+                <span className={pnlClass(unrealized)}>
+                  {fmtUsd(unrealized, { signed: true })} open
+                </span>
+              </>
+            : closedCount24h === 1 ? '1 closed trade' : `${closedCount24h} closed trades`
+        }
+      />
+
+      <StripStat
+        label="Session P&L"
+        value={realizedSession == null ? '—' : fmtUsd(realizedSession, { signed: true })}
+        valueClass={realizedSession == null ? 'text-muted-foreground' : pnlClass(realizedSession)}
+        sub={
+          sessionStartDate
+            ? `since ${relativeTime(sessionStartDate)} · ${closedCountSession} closed`
+            : 'no session start'
+        }
+      />
+
+      <StripStat
+        label="Drawdown"
+        value={
+          noDdData
+            ? '—'
+            : drawdown.current === 0
+              ? 'at ATH'
+              : `−${fmtUsd(drawdown.current)}`
+        }
+        valueClass={
+          noDdData
+            ? 'text-muted-foreground'
+            : drawdown.current === 0
+              ? 'text-[var(--positive)]'
+              : 'text-[var(--negative)]'
+        }
+        sub={
+          noDdData
+            ? 'no closed trades yet'
+            : <>
+                max 24h {drawdown.max24h === 0 ? '$0' : `−${fmtUsd(drawdown.max24h)}`}
+                <span className="text-muted-foreground/60"> · </span>
+                30d {drawdown.max30d === 0 ? '$0' : `−${fmtUsd(drawdown.max30d)}`}
+              </>
+        }
+      />
+
+      <StripStat
+        label="Commissions 24h"
+        value={closedCount24h > 0 ? fmtUsd(commissions24h) : '—'}
+        valueClass={closedCount24h > 0 ? 'text-[var(--negative)]' : 'text-muted-foreground'}
+        sub={
+          avgCommission24h == null
+            ? 'no fills yet'
+            : <>
+                avg {fmtUsd(avgCommission24h)}/trade
+                {commissionsSession != null && (
+                  <>
+                    <span className="text-muted-foreground/60"> · </span>
+                    session {fmtUsd(commissionsSession)}
+                  </>
+                )}
+              </>
+        }
+      />
     </section>
   )
 }
 
-function BigStat({
+function StripStat({
   label,
   value,
+  valueClass,
   sub,
-  count,
-  muteIfNull,
 }: {
   label: string
-  value: number | null
+  value: React.ReactNode
+  valueClass?: string
   sub?: React.ReactNode
-  count?: number
-  muteIfNull?: boolean
 }) {
-  const showDash = value == null || (muteIfNull && (count == null || count === 0) && !sub)
   return (
-    <div className="rounded border border-border bg-card px-4 py-3 space-y-2">
+    <div className="rounded border border-border bg-card px-3 py-2.5 space-y-1">
       <div className="text-[10px] text-muted-foreground uppercase tracking-widest">{label}</div>
-      <div
-        className={cn(
-          'font-mono tabular-nums leading-none',
-          'text-2xl md:text-3xl font-semibold',
-          showDash ? 'text-muted-foreground' : pnlClass(value),
-        )}
-      >
-        {showDash ? '—' : fmtUsd(value, { signed: true })}
+      <div className={cn('font-mono font-semibold tabular-nums text-lg leading-none', valueClass)}>
+        {value}
       </div>
-      {sub != null && <div className="text-[10px] text-muted-foreground font-mono">{sub}</div>}
+      {sub != null && (
+        <div className="text-[10px] text-muted-foreground font-mono">{sub}</div>
+      )}
     </div>
   )
 }
@@ -867,61 +920,6 @@ function computeDrawdown(series: DrawdownPoint[], nowMs: number): DrawdownStats 
     latestCumPnl: cum,
     peakCumPnl: peak,
   }
-}
-
-function DrawdownPanel({ drawdown }: { drawdown: DrawdownStats }) {
-  const noData = drawdown.pointsInWindow30d === 0
-  return (
-    <section className="rounded border border-border bg-card p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Drawdown
-        </h2>
-        <span className="text-[10px] text-muted-foreground font-mono">
-          peak − current, cumulative realized P&amp;L
-        </span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <StatCard
-          label="Current"
-          value={
-            noData
-              ? <span className="text-lg text-muted-foreground">—</span>
-              : <span className={cn('text-lg', drawdown.current === 0 ? 'text-[var(--positive)]' : 'text-[var(--negative)]')}>
-                  {drawdown.current === 0 ? 'at ATH' : `−${fmtUsd(drawdown.current)}`}
-                </span>
-          }
-          sub={
-            drawdown.latestCumPnl != null && drawdown.peakCumPnl != null
-              ? `cum ${fmtUsd(drawdown.latestCumPnl, { signed: true })} · peak ${fmtUsd(drawdown.peakCumPnl, { signed: true })}`
-              : undefined
-          }
-        />
-        <StatCard
-          label="Max drawdown (24h)"
-          value={
-            noData
-              ? <span className="text-lg text-muted-foreground">—</span>
-              : <span className={cn('text-lg', drawdown.max24h === 0 ? '' : 'text-[var(--negative)]')}>
-                  {drawdown.max24h === 0 ? '$0' : `−${fmtUsd(drawdown.max24h)}`}
-                </span>
-          }
-          sub={`${drawdown.pointsInWindow24h} closed trade${drawdown.pointsInWindow24h === 1 ? '' : 's'} in window`}
-        />
-        <StatCard
-          label="Max drawdown (30d)"
-          value={
-            noData
-              ? <span className="text-lg text-muted-foreground">—</span>
-              : <span className={cn('text-lg', drawdown.max30d === 0 ? '' : 'text-[var(--negative)]')}>
-                  {drawdown.max30d === 0 ? '$0' : `−${fmtUsd(drawdown.max30d)}`}
-                </span>
-          }
-          sub={`${drawdown.pointsInWindow30d} closed trade${drawdown.pointsInWindow30d === 1 ? '' : 's'} in window`}
-        />
-      </div>
-    </section>
-  )
 }
 
 // ── Slippage panel (per-trade, last 20) ───────────────────────────────────
