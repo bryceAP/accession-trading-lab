@@ -1,11 +1,18 @@
 import { createClient } from '@/lib/supabase/server'
-import { LiveView, type LivePaperStatus, type LiveTrade, type LiveEvent } from './_components/live-view'
+import {
+  LiveView,
+  type LivePaperStatus,
+  type LiveTrade,
+  type LiveEvent,
+  type DrawdownPoint,
+  HONEST_DATA_CUTOFF_ISO,
+} from './_components/live-view'
 
-const TRADE_LIMIT = 100
+const TRADE_LIMIT = 200
 const EVENT_LIMIT = 100
-const FILL_LOOKBACK_LIMIT = 500
+const DRAWDOWN_LIMIT = 5000
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
 
 export default async function LivePage() {
   const supabase = createClient()
@@ -13,10 +20,10 @@ export default async function LivePage() {
   // Rolling 24-hour window instead of UTC midnight — a UTC cutoff hides
   // evening trades made in MT (America/Denver). For the dashboard's purposes
   // "last 24h" is what we want either way.
-  const cutoffIso = new Date(Date.now() - TWENTY_FOUR_HOURS_MS).toISOString()
-  const fillsCutoffIso = new Date(Date.now() - SEVEN_DAYS_MS).toISOString()
+  const feedCutoffIso = new Date(Date.now() - TWENTY_FOUR_HOURS_MS).toISOString()
+  const drawdownCutoffIso = new Date(Date.now() - THIRTY_DAYS_MS).toISOString()
 
-  const [statusRes, tradesRes, eventsRes, openPosRes, fillsRes] = await Promise.all([
+  const [statusRes, tradesRes, eventsRes, openPosRes, ddRes] = await Promise.all([
     supabase
       .from('paper_status')
       .select(
@@ -26,12 +33,19 @@ export default async function LivePage() {
       )
       .eq('id', 1)
       .maybeSingle(),
+    // 24h feed — filter by exit_ts so closed trades roll off the panel a day
+    // after they close (not a day after they open). created_at cutoff drops
+    // the two dirty pre-fix rows (see live-view HONEST_DATA_CUTOFF_ISO).
     supabase
       .from('trades')
-      .select('id, entry_ts, exit_ts, side, entry_price, exit_price, quantity, pnl, commission, slippage, instrument, source')
+      .select(
+        'id, entry_ts, exit_ts, strategy_name, side, entry_price, exit_price, ' +
+        'quantity, pnl, commission, slippage, exit_reason, instrument, source, created_at'
+      )
       .eq('source', 'paper')
-      .gte('entry_ts', cutoffIso)
-      .order('entry_ts', { ascending: false })
+      .gte('exit_ts', feedCutoffIso)
+      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
+      .order('exit_ts', { ascending: false })
       .limit(TRADE_LIMIT),
     supabase
       .from('events')
@@ -51,17 +65,18 @@ export default async function LivePage() {
       .order('ts', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    // 7-day rolling slippage corpus — drives both today's avg and the 7-day
-    // baseline on the SlippageStats panel. One query, client splits on the ET
-    // midnight boundary.
+    // 30-day trades series for drawdown. Only need exit_ts + pnl. Enforce
+    // honest-data cutoff and non-null exit_ts so the cumulative pnl is
+    // computed only on trades whose numbers we trust.
     supabase
-      .from('events')
-      .select('id, ts, event_type, source, data')
+      .from('trades')
+      .select('exit_ts, pnl')
       .eq('source', 'paper')
-      .eq('event_type', 'order_filled')
-      .gte('ts', fillsCutoffIso)
-      .order('ts', { ascending: false })
-      .limit(FILL_LOOKBACK_LIMIT),
+      .gte('exit_ts', drawdownCutoffIso)
+      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
+      .not('exit_ts', 'is', null)
+      .order('exit_ts', { ascending: true })
+      .limit(DRAWDOWN_LIMIT),
   ])
 
   // Per-query diagnostics: log row count and any error so we can tell apart
@@ -71,10 +86,10 @@ export default async function LivePage() {
     rows: statusRes.data ? 1 : 0,
     error: statusRes.error?.message ?? null,
   })
-  console.log('[Live] trades (source=paper, last 24h)', {
+  console.log('[Live] trades (source=paper, exit_ts last 24h, post-cutoff)', {
     rows: tradesRes.data?.length ?? 0,
     error: tradesRes.error?.message ?? null,
-    cutoff: cutoffIso,
+    cutoff: feedCutoffIso,
   })
   console.log('[Live] events (source in paper,live)', {
     rows: eventsRes.data?.length ?? 0,
@@ -84,10 +99,10 @@ export default async function LivePage() {
     found: openPosRes.data ? 1 : 0,
     error: openPosRes.error?.message ?? null,
   })
-  console.log('[Live] order_filled (last 7d)', {
-    rows: fillsRes.data?.length ?? 0,
-    error: fillsRes.error?.message ?? null,
-    cutoff: fillsCutoffIso,
+  console.log('[Live] drawdown series (30d post-cutoff)', {
+    rows: ddRes.data?.length ?? 0,
+    error: ddRes.error?.message ?? null,
+    cutoff: drawdownCutoffIso,
   })
 
   return (
@@ -98,11 +113,11 @@ export default async function LivePage() {
       </div>
 
       <LiveView
-        initialStatus={(statusRes.data ?? null) as LivePaperStatus | null}
-        initialTrades={(tradesRes.data ?? []) as LiveTrade[]}
-        initialEvents={(eventsRes.data ?? []) as LiveEvent[]}
-        initialOpenPosition={(openPosRes.data ?? null) as LiveEvent | null}
-        initialFills={(fillsRes.data ?? []) as LiveEvent[]}
+        initialStatus={(statusRes.data ?? null) as unknown as LivePaperStatus | null}
+        initialTrades={(tradesRes.data ?? []) as unknown as LiveTrade[]}
+        initialEvents={(eventsRes.data ?? []) as unknown as LiveEvent[]}
+        initialOpenPosition={(openPosRes.data ?? null) as unknown as LiveEvent | null}
+        initialDrawdownSeries={(ddRes.data ?? []) as unknown as DrawdownPoint[]}
         statusError={statusRes.error?.message ?? null}
         tradesError={tradesRes.error?.message ?? null}
         eventsError={eventsRes.error?.message ?? null}
