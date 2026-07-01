@@ -37,6 +37,9 @@ export const EXIT_REASON_LABEL: Record<string, string> = {
   breakeven_vwma: 'Breakeven (VWMA)',
   structural_stop: 'Structural stop',
   force_flat: 'Force flat',
+  // Paper runner emits this when the operator stops the process cleanly and
+  // any open position is force-closed on the way out. Neutral, not a signal.
+  manual_close_shutdown: 'Manual close',
   other: 'Other',
 }
 
