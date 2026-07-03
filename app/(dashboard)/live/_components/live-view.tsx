@@ -17,7 +17,6 @@ import {
   formatET,
   sourceStyle,
 } from '../../activity/_components/styles'
-import { HONEST_DATA_CUTOFF_ISO } from './constants'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -178,9 +177,6 @@ export function LiveView({
   // ── Trade merge helper (shared by realtime + polling paths) ─────────────
   const upsertTrade = useCallback((t: LiveTrade) => {
     if (!t || t.source !== 'paper') return
-    // Enforce honest-data cutoff on the client too — polling could otherwise
-    // resurface a pre-cutoff row if someone edits it after 2026-07-01.
-    if (t.created_at && new Date(t.created_at).getTime() < new Date(HONEST_DATA_CUTOFF_ISO).getTime()) return
     setTrades((prev) => {
       const idx = prev.findIndex((x) => x.id === t.id)
       if (idx === -1) return [t, ...prev]
@@ -337,7 +333,6 @@ export function LiveView({
           )
           .eq('source', 'paper')
           .gte('exit_ts', feedCutoffIso)
-          .gt('created_at', HONEST_DATA_CUTOFF_ISO)
           .order('exit_ts', { ascending: false })
           .limit(200)
         if (cancelled) return

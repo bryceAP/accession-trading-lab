@@ -74,12 +74,14 @@ export default async function OverviewPage({
   let archiveColumnAvailable = true
   let archivedCount = 0
 
+  // Two paths: with archive (no honest-data cutoff — Bryce archives dirty
+  // rows explicitly) and without archive (cutoff still applied as fallback
+  // to hide T1/T2 until the column ships).
   const [firstTry, statusRes, backtestsRes] = await Promise.all([
     supabase
       .from('trades')
       .select(COLS_WITH_ARCHIVE)
       .eq('source', 'paper')
-      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
       .gte('exit_ts', cutoffIso)
       .order('exit_ts', { ascending: false })
       .limit(5000),

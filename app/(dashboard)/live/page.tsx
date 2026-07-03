@@ -5,7 +5,6 @@ import {
   type LiveTrade,
   type LiveEvent,
 } from './_components/live-view'
-import { HONEST_DATA_CUTOFF_ISO } from './_components/constants'
 
 const TRADE_LIMIT = 200
 const EVENT_LIMIT = 100
@@ -45,10 +44,9 @@ export default async function LivePage() {
       )
       .eq('id', 1)
       .maybeSingle(),
-    // Today's paper trades — filter by exit_ts >= ET midnight. created_at
-    // cutoff drops the two dirty pre-fix rows silently (see
-    // live-view HONEST_DATA_CUTOFF_ISO); when trades.archived_at ships from
-    // backend this filter can go and Bryce archives them from Overview.
+    // Today's paper trades — filter by exit_ts >= ET midnight. The dirty
+    // pre-2026-07-01 rows are naturally out of window here, so no separate
+    // created_at cutoff needed. Overview still uses one until archive lands.
     supabase
       .from('trades')
       .select(
@@ -57,7 +55,6 @@ export default async function LivePage() {
       )
       .eq('source', 'paper')
       .gte('exit_ts', feedCutoffIso)
-      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
       .order('exit_ts', { ascending: false })
       .limit(TRADE_LIMIT),
     supabase

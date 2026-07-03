@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Archive, ArchiveRestore, ChevronRight, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/client'
 import {
   fmtNumber,
   fmtPct,
@@ -304,13 +305,14 @@ export function OverviewView({
   )
 }
 
-// ── Runner pill (server-rendered snapshot) ────────────────────────────────
+// ── Runner pill (client-polled) ────────────────────────────────────────────
 
-// Same heartbeat rule as /live and the sidebar. Overview is on a 30s
-// revalidate so this is a snapshot, not a live pulse — but the pill's
-// classification only depends on what's in paper_status at render time, so
-// staleness surfaces as long as the writer hasn't updated the row.
+// Same heartbeat rule as /live and the sidebar. Overview seeds from a
+// server-rendered snapshot but polls paper_status client-side every 15s
+// so the pill flips "Stopped → Live" without waiting on the 30s server
+// revalidate. Uses the same query shape as the sidebar so both agree.
 const STALE_MS = 390 * 1000
+const RUNNER_POLL_MS = 15 * 1000
 
 function runnerState(r: RunnerSnapshot | null, nowMs: number): 'live' | 'stale' | 'stopped' | 'idle' {
   if (!r) return 'idle'
@@ -321,13 +323,37 @@ function runnerState(r: RunnerSnapshot | null, nowMs: number): 'live' | 'stale' 
   return 'live'
 }
 
-function RunnerPill({ runner }: { runner: RunnerSnapshot | null }) {
-  // Tick locally so a browser tab left open re-classifies to "stale" without
-  // needing the 30s server revalidate to fire first.
+function RunnerPill({ runner: initialRunner }: { runner: RunnerSnapshot | null }) {
+  const [runner, setRunner] = useState<RunnerSnapshot | null>(initialRunner)
   const [now, setNow] = useState<number>(() => Date.now())
+
+  // Local ticker so staleness re-classifies without a poll roundtrip.
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5000)
     return () => clearInterval(id)
+  }, [])
+
+  // 15s poll of paper_status. Same query as the sidebar so both surfaces
+  // agree on Live / Stopped state.
+  useEffect(() => {
+    const supabase = createClient()
+    let cancelled = false
+
+    async function poll() {
+      const { data } = await supabase
+        .from('paper_status')
+        .select('is_running, last_heartbeat, strategy_name, instrument, position_side, connection_state, started_at')
+        .eq('id', 1)
+        .maybeSingle()
+      if (cancelled) return
+      if (data) setRunner(data as unknown as RunnerSnapshot)
+    }
+
+    const id = setInterval(poll, RUNNER_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   const state = runnerState(runner, now)
