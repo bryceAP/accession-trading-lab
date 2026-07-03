@@ -1,14 +1,16 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Archive, ArchiveRestore, ChevronRight, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
-  fmtUsd,
+  fmtNumber,
   fmtPct,
+  fmtUsd,
   pnlClass,
+  relativeTime,
 } from '../backtests/_components/format'
 import { ExitReasonBadge } from '../backtests/_components/exit-reason'
 import { fmtTradeTime } from '@/lib/format'
@@ -35,6 +37,30 @@ export type PaperTradeRow = {
   strategy_name: string | null
   instrument: string | null
   created_at: string | null
+  archived_at: string | null
+}
+
+export type RunnerSnapshot = {
+  is_running: boolean | null
+  last_heartbeat: string | null
+  strategy_name: string | null
+  instrument: string | null
+  position_side: 'LONG' | 'SHORT' | 'FLAT' | null
+  connection_state: 'connected' | 'stopped' | 'disconnected' | null
+  started_at: string | null
+}
+
+export type RecentBacktest = {
+  id: string
+  label: string | null
+  strategy_name: string | null
+  instrument: string | null
+  timeframe: string | null
+  completed_at: string | null
+  net_pnl: number | string | null
+  sharpe: number | string | null
+  trades_count: number | string | null
+  max_drawdown: number | string | null
   archived_at: string | null
 }
 
@@ -222,27 +248,34 @@ export function OverviewView({
   showArchived,
   archivedCount,
   archiveColumnAvailable,
+  runner,
+  recentBacktests,
 }: {
   trades: PaperTradeRow[]
   group: Group
   showArchived: boolean
   archivedCount: number
   archiveColumnAvailable: boolean
+  runner: RunnerSnapshot | null
+  recentBacktests: RecentBacktest[]
 }) {
   const buckets = useMemo(() => bucketize(trades, group), [trades, group])
   const summary = useMemo(() => summarize(buckets), [buckets])
 
   return (
     <div className="p-6 max-w-[1400px] space-y-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h1 className="text-sm font-semibold tracking-tight">Overview</h1>
-        <div className="flex items-baseline gap-3 text-[10px] text-muted-foreground font-mono">
-          <span>{WINDOW_LABEL[group]}</span>
-          <span className="text-muted-foreground/40">·</span>
-          <span>source = paper</span>
-          <span className="text-muted-foreground/40">·</span>
-          <span>times in ET</span>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-sm font-semibold tracking-tight">Overview</h1>
+          <div className="flex items-baseline gap-3 text-[10px] text-muted-foreground font-mono">
+            <span>{WINDOW_LABEL[group]}</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span>source = paper</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span>times in ET</span>
+          </div>
         </div>
+        <RunnerPill runner={runner} />
       </div>
 
       {!archiveColumnAvailable && (
@@ -265,8 +298,97 @@ export function OverviewView({
         group={group}
         canArchive={archiveColumnAvailable}
       />
+
+      <RecentBacktestsList backtests={recentBacktests} />
     </div>
   )
+}
+
+// ── Runner pill (server-rendered snapshot) ────────────────────────────────
+
+// Same heartbeat rule as /live and the sidebar. Overview is on a 30s
+// revalidate so this is a snapshot, not a live pulse — but the pill's
+// classification only depends on what's in paper_status at render time, so
+// staleness surfaces as long as the writer hasn't updated the row.
+const STALE_MS = 390 * 1000
+
+function runnerState(r: RunnerSnapshot | null, nowMs: number): 'live' | 'stale' | 'stopped' | 'idle' {
+  if (!r) return 'idle'
+  if (!r.is_running) return 'stopped'
+  if (!r.last_heartbeat) return 'stale'
+  const age = nowMs - new Date(r.last_heartbeat).getTime()
+  if (!Number.isFinite(age) || age >= STALE_MS) return 'stale'
+  return 'live'
+}
+
+function RunnerPill({ runner }: { runner: RunnerSnapshot | null }) {
+  // Tick locally so a browser tab left open re-classifies to "stale" without
+  // needing the 30s server revalidate to fire first.
+  const [now, setNow] = useState<number>(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  const state = runnerState(runner, now)
+  const style = RUNNER_STYLES[state]
+  const strategy = runner?.strategy_name?.trim() || null
+  const instrument = runner?.instrument?.trim() || null
+
+  return (
+    <div className="flex items-center gap-2">
+      {strategy && (
+        <span className="text-[10px] text-muted-foreground font-mono">
+          <span className="text-muted-foreground/60">strategy </span>
+          <span className="text-foreground/80">{strategy}</span>
+          {instrument && (
+            <>
+              <span className="text-muted-foreground/40 mx-1.5">·</span>
+              <span>{instrument}</span>
+            </>
+          )}
+        </span>
+      )}
+      <Link
+        href="/live"
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-widest transition-colors',
+          style.cls,
+        )}
+        title={
+          runner?.last_heartbeat
+            ? `Last heartbeat ${relativeTime(new Date(runner.last_heartbeat))}`
+            : 'No paper_status row'
+        }
+      >
+        <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
+        {style.label}
+      </Link>
+    </div>
+  )
+}
+
+const RUNNER_STYLES: Record<'live' | 'stale' | 'stopped' | 'idle', { label: string; cls: string; dot: string }> = {
+  live: {
+    label: 'Live trading',
+    cls: 'border-[var(--positive)]/30 text-[var(--positive)] bg-[var(--positive)]/10 hover:bg-[var(--positive)]/15',
+    dot: 'bg-[var(--positive)] animate-pulse',
+  },
+  stale: {
+    label: 'Stale',
+    cls: 'border-[var(--negative)]/30 text-[var(--negative)] bg-[var(--negative)]/10 hover:bg-[var(--negative)]/15',
+    dot: 'bg-[var(--negative)]',
+  },
+  stopped: {
+    label: 'Stopped',
+    cls: 'border-border text-muted-foreground bg-muted/40 hover:bg-muted/60',
+    dot: 'bg-muted-foreground/40',
+  },
+  idle: {
+    label: 'No session',
+    cls: 'border-border text-muted-foreground bg-muted/40 hover:bg-muted/60',
+    dot: 'bg-muted-foreground/30',
+  },
 }
 
 // ── Backend-missing banner ────────────────────────────────────────────────
@@ -789,5 +911,98 @@ function DeleteDialog({
         </div>
       </div>
     </div>
+  )
+}
+
+// ── Recent backtests strip ────────────────────────────────────────────────
+
+// Compact list at the bottom of Overview so recent research + live trading
+// share the same tab. Deep-links each row to /backtests/[id]; a "see all"
+// pointer at the top opens the full backtests table.
+function RecentBacktestsList({ backtests }: { backtests: RecentBacktest[] }) {
+  return (
+    <section className="rounded border border-border bg-card overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Recent backtests
+        </h2>
+        <Link
+          href="/backtests"
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors font-mono"
+        >
+          view all →
+        </Link>
+      </div>
+      {backtests.length === 0 ? (
+        <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+          No completed backtests yet.
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted/30 text-[10px] uppercase tracking-widest text-muted-foreground">
+                <th className="px-3 py-2 text-left  font-semibold">Label</th>
+                <th className="px-3 py-2 text-left  font-semibold">Strategy</th>
+                <th className="px-3 py-2 text-left  font-semibold">Instrument · TF</th>
+                <th className="px-3 py-2 text-right font-semibold">Net P&amp;L</th>
+                <th className="px-3 py-2 text-right font-semibold">Sharpe</th>
+                <th className="px-3 py-2 text-right font-semibold">Max DD</th>
+                <th className="px-3 py-2 text-right font-semibold">Trades</th>
+                <th className="px-3 py-2 text-right font-semibold">Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {backtests.map((b) => {
+                const label = b.label?.trim() || b.strategy_name?.trim() || b.id.slice(0, 8)
+                const netPnl = b.net_pnl == null ? null : Number(b.net_pnl)
+                const sharpe = b.sharpe == null ? null : Number(b.sharpe)
+                const maxDd = b.max_drawdown == null ? null : Number(b.max_drawdown)
+                const trades = b.trades_count == null ? null : Number(b.trades_count)
+                return (
+                  <tr key={b.id} className="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
+                    <td className="px-3 py-1.5">
+                      <Link
+                        href={`/backtests/${b.id}`}
+                        className="text-foreground hover:underline font-mono"
+                      >
+                        {label}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                      {b.strategy_name ?? '—'}
+                    </td>
+                    <td className="px-3 py-1.5 font-mono text-muted-foreground">
+                      {b.instrument ?? '—'}
+                      {b.timeframe && (
+                        <>
+                          <span className="text-muted-foreground/40 mx-1">·</span>
+                          <span>{b.timeframe}</span>
+                        </>
+                      )}
+                    </td>
+                    <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums font-semibold', pnlClass(netPnl))}>
+                      {netPnl == null || Number.isNaN(netPnl) ? '—' : fmtUsd(netPnl, { signed: true })}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums">
+                      {sharpe == null || Number.isNaN(sharpe) ? '—' : fmtNumber(sharpe, 2)}
+                    </td>
+                    <td className={cn('px-3 py-1.5 text-right font-mono tabular-nums', maxDd != null && maxDd < 0 && 'text-[var(--negative)]')}>
+                      {maxDd == null || Number.isNaN(maxDd) ? '—' : fmtUsd(maxDd)}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground">
+                      {trades == null || Number.isNaN(trades) ? '—' : trades.toLocaleString('en-US')}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono tabular-nums text-muted-foreground text-[11px]">
+                      {b.completed_at ? relativeTime(new Date(b.completed_at)) : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }

@@ -1,5 +1,11 @@
 import { createClient } from '@/lib/supabase/server'
-import { OverviewView, type Group, type PaperTradeRow } from './_overview/overview-view'
+import {
+  OverviewView,
+  type Group,
+  type PaperTradeRow,
+  type RunnerSnapshot,
+  type RecentBacktest,
+} from './_overview/overview-view'
 import { HONEST_DATA_CUTOFF_ISO } from './live/_components/constants'
 
 // Overview is a windowed snapshot of paper-trade history. /live carries the
@@ -18,6 +24,7 @@ const COLS_WITHOUT_ARCHIVE =
   'pnl, commission, slippage, exit_reason, strategy_name, instrument, ' +
   'created_at, source'
 
+const RECENT_BACKTESTS_LIMIT = 8
 const DAYS = 24 * 60 * 60 * 1000
 
 function windowStartIso(group: Group): string {
@@ -41,21 +48,44 @@ export default async function OverviewPage({
   const showArchived = searchParams.archived === '1'
   const cutoffIso = windowStartIso(group)
 
-  // Try to select with archived_at first. If the column doesn't exist yet
-  // (backend hasn't shipped the migration), fall back to a select without
-  // it and let the client render a "backend column missing" banner.
+  // Kick off status + recent-backtests fetches alongside the main trades
+  // query — none of them depend on each other.
+  const statusReq = supabase
+    .from('paper_status')
+    .select('is_running, last_heartbeat, strategy_name, instrument, position_side, connection_state, started_at')
+    .eq('id', 1)
+    .maybeSingle()
+
+  const backtestsReq = supabase
+    .from('backtests')
+    .select(
+      'id, label, strategy_name, instrument, timeframe, completed_at, net_pnl, sharpe, trades_count, max_drawdown, archived_at',
+    )
+    .is('archived_at', null)
+    .not('completed_at', 'is', null)
+    .order('completed_at', { ascending: false })
+    .limit(RECENT_BACKTESTS_LIMIT)
+
+  // Try to select trades with archived_at first. If the column doesn't
+  // exist yet (backend hasn't shipped the migration), fall back to a
+  // select without it and let the client render a "backend column
+  // missing" banner.
   let rows: PaperTradeRow[] = []
   let archiveColumnAvailable = true
   let archivedCount = 0
 
-  const firstTry = await supabase
-    .from('trades')
-    .select(COLS_WITH_ARCHIVE)
-    .eq('source', 'paper')
-    .gt('created_at', HONEST_DATA_CUTOFF_ISO)
-    .gte('exit_ts', cutoffIso)
-    .order('exit_ts', { ascending: false })
-    .limit(5000)
+  const [firstTry, statusRes, backtestsRes] = await Promise.all([
+    supabase
+      .from('trades')
+      .select(COLS_WITH_ARCHIVE)
+      .eq('source', 'paper')
+      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
+      .gte('exit_ts', cutoffIso)
+      .order('exit_ts', { ascending: false })
+      .limit(5000),
+    statusReq,
+    backtestsReq,
+  ])
 
   if (firstTry.error) {
     const msg = firstTry.error.message ?? ''
@@ -73,7 +103,6 @@ export default async function OverviewPage({
       if (fallback.error) {
         console.error('[Overview] fallback query failed', fallback.error)
       } else {
-        // Synthesize archived_at=null so the client type is uniform.
         rows = ((fallback.data ?? []) as unknown as Omit<PaperTradeRow, 'archived_at'>[])
           .map((r) => ({ ...r, archived_at: null }))
       }
@@ -84,14 +113,15 @@ export default async function OverviewPage({
     rows = (firstTry.data ?? []) as unknown as PaperTradeRow[]
   }
 
-  // Filter archived rows out of the default view; count archived rows in
-  // the window regardless so the toggle can show the count hint.
   if (archiveColumnAvailable) {
     archivedCount = rows.filter((r) => r.archived_at != null).length
     if (!showArchived) {
       rows = rows.filter((r) => r.archived_at == null)
     }
   }
+
+  const runner = (statusRes.data ?? null) as unknown as RunnerSnapshot | null
+  const recentBacktests = (backtestsRes.data ?? []) as unknown as RecentBacktest[]
 
   console.log('[Overview] trades', {
     group,
@@ -101,6 +131,15 @@ export default async function OverviewPage({
     archivedCount,
     cutoff: cutoffIso,
   })
+  console.log('[Overview] runner', {
+    running: runner?.is_running ?? null,
+    strategy: runner?.strategy_name ?? null,
+    error: statusRes.error?.message ?? null,
+  })
+  console.log('[Overview] recent backtests', {
+    rows: recentBacktests.length,
+    error: backtestsRes.error?.message ?? null,
+  })
 
   return (
     <OverviewView
@@ -109,6 +148,8 @@ export default async function OverviewPage({
       showArchived={showArchived}
       archivedCount={archivedCount}
       archiveColumnAvailable={archiveColumnAvailable}
+      runner={runner}
+      recentBacktests={recentBacktests}
     />
   )
 }
