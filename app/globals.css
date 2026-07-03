@@ -56,32 +56,35 @@
   :root {
     color-scheme: dark;
 
-    /* Accession Partners brand — warm dark palette with deep gold accent. */
-    --background:                 #131210;
-    --foreground:                 #FAF7F2;
+    /* Neutral pure-black surfaces with the AP gold accent for brand
+       elements (nav highlight, ring, warning). Warm-brown tones are
+       intentionally out of the surface palette — surfaces are true
+       black / neutral off-black, text is neutral off-white. */
+    --background:                 #000000;
+    --foreground:                 #FAFAFA;
 
-    --card:                       #1E1A15;
-    --card-foreground:            #FAF7F2;
+    --card:                       #0F0F0F;
+    --card-foreground:            #FAFAFA;
 
-    --popover:                    #1E1A15;
-    --popover-foreground:         #FAF7F2;
+    --popover:                    #0F0F0F;
+    --popover-foreground:         #FAFAFA;
 
-    --primary:                    #FAF7F2;
-    --primary-foreground:         #131210;
+    --primary:                    #FAFAFA;
+    --primary-foreground:         #000000;
 
-    --secondary:                  #1A1714;
-    --secondary-foreground:       #FAF7F2;
+    --secondary:                  #171717;
+    --secondary-foreground:       #FAFAFA;
 
-    --muted:                      #1A1714;
-    --muted-foreground:           #A89880;
+    --muted:                      #171717;
+    --muted-foreground:           #A1A1A1;
 
     --accent:                     #9B7D4A;
-    --accent-foreground:          #FAF7F2;
+    --accent-foreground:          #FAFAFA;
 
     --destructive:                oklch(0.62 0.21 25);
 
-    --border:                     rgba(250, 247, 242, 0.08);
-    --input:                      #1A1714;
+    --border:                     rgba(250, 250, 250, 0.08);
+    --input:                      #171717;
     --ring:                       #C4A46B;
 
     --chart-1:                    oklch(0.65 0.15 230);
@@ -92,13 +95,13 @@
 
     --radius:                     0.375rem;
 
-    --sidebar:                    #131210;
-    --sidebar-foreground:         #FAF7F2;
-    --sidebar-primary:            #FAF7F2;
-    --sidebar-primary-foreground: #131210;
-    --sidebar-accent:             #1E1A15;
-    --sidebar-accent-foreground:  #FAF7F2;
-    --sidebar-border:             rgba(250, 247, 242, 0.08);
+    --sidebar:                    #000000;
+    --sidebar-foreground:         #FAFAFA;
+    --sidebar-primary:            #FAFAFA;
+    --sidebar-primary-foreground: #000000;
+    --sidebar-accent:             #0F0F0F;
+    --sidebar-accent-foreground:  #FAFAFA;
+    --sidebar-border:             rgba(250, 250, 250, 0.08);
     --sidebar-ring:               #C4A46B;
 
     --positive:                   oklch(0.65 0.17 145);
