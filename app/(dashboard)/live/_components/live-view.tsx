@@ -17,7 +17,7 @@ import {
   formatET,
   sourceStyle,
 } from '../../activity/_components/styles'
-import { HONEST_DATA_CUTOFF_ISO, PRE_CUTOFF_RECAP_USD } from './constants'
+import { HONEST_DATA_CUTOFF_ISO } from './constants'
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -491,8 +491,6 @@ export function LiveView({
         <ErrorBanner label="paper_status" message={statusError} />
       )}
 
-      {!inactive && <HonestDataBanner />}
-
       {!inactive && <ScheduleCountdown now={now} />}
 
       {!inactive && hasPosition && (
@@ -523,36 +521,6 @@ function ErrorBanner({ label, message }: { label: string; message: string }) {
     <div className="rounded border border-[var(--negative)]/40 bg-[var(--negative)]/10 px-3 py-2 text-xs text-[var(--negative)] font-mono">
       <span className="font-semibold uppercase tracking-widest mr-2">[{label}]</span>
       {message}
-    </div>
-  )
-}
-
-// ── Honest-data disclosure banner ─────────────────────────────────────────
-
-function HonestDataBanner() {
-  const cutoffMt = new Date(HONEST_DATA_CUTOFF_ISO).toLocaleString('en-US', {
-    timeZone: 'America/Denver',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  })
-  return (
-    <div className="rounded border border-[var(--warning)]/30 bg-[var(--warning)]/10 px-3 py-2 text-[11px] text-[var(--warning)] flex items-start gap-2">
-      <TriangleAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-      <div className="space-y-0.5">
-        <div>
-          Feed reset to honest data at{' '}
-          <span className="font-mono">{cutoffMt} MT</span>
-          {' '}after slippage/PnL math fix in mes-algo runners/paper.py.
-        </div>
-        <div className="text-[10px] text-[var(--warning)]/80">
-          Pre-cutoff recap (not shown):{' '}
-          <span className="font-mono">
-            {fmtUsd(PRE_CUTOFF_RECAP_USD, { signed: true })}
-          </span>
-          {' '}realized across 2 trades (T1 recorded wrong; T2 missing due to
-          shutdown DB-writer race).
-        </div>
-      </div>
     </div>
   )
 }
@@ -932,10 +900,6 @@ type SlippageStats = {
 }
 
 function SlippagePanel({ stats }: { stats: SlippageStats | null }) {
-  const cutoffMt = new Date(HONEST_DATA_CUTOFF_ISO).toLocaleString('en-US', {
-    timeZone: 'America/Denver',
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  })
   return (
     <section className="rounded border border-border bg-card p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -943,7 +907,7 @@ function SlippagePanel({ stats }: { stats: SlippageStats | null }) {
           Slippage tracking
         </h2>
         <span className="text-[10px] text-muted-foreground font-mono">
-          honest fills only (post-{cutoffMt} MT) · positive = adverse
+          positive = adverse
         </span>
       </div>
       {stats == null ? (
@@ -997,21 +961,17 @@ function TradesPanel({
   return (
     <section className="rounded border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Paper trades · last 24h
-        </h2>
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--warning)]/30 text-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-widest"
-            title="Costs are simulated for paper trading"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)]" />
-            estimated
-          </span>
-          <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
-            {trades.length}
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Paper trades · last 24h
+          </h2>
+          <span className="text-[10px] text-muted-foreground/70 font-mono">
+            times in ET
           </span>
         </div>
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
+          {trades.length}
+        </span>
       </div>
 
       {error ? (
