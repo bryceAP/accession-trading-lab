@@ -8,8 +8,13 @@ const PAGE_SIZE = 50
 export default async function ActivityPage() {
   const supabase = createClient()
 
-  // Initial page of events + the full set of distinct event_types / sources for
-  // the filter chips (so rare types still appear even if absent from page 1).
+  // Distinct event_type / source values for the filter chips. Sampled from
+  // the last 5000 rows (ordered by ts desc) — a full-table scan grows
+  // unboundedly as live trading emits events and eventually made the page
+  // load slow enough to feel broken. If a rare event type stops appearing
+  // in that sample, it drops off the chips — acceptable trade-off since
+  // chips are for current-navigation, not historical archaeology.
+  const FILTER_SAMPLE = 5000
   const [eventsRes, typesRes, sourcesRes, strategyMap] = await Promise.all([
     supabase
       .from('events')
@@ -17,8 +22,16 @@ export default async function ActivityPage() {
       .order('ts', { ascending: false })
       .order('id', { ascending: false })
       .limit(PAGE_SIZE),
-    supabase.from('events').select('event_type'),
-    supabase.from('events').select('source'),
+    supabase
+      .from('events')
+      .select('event_type')
+      .order('ts', { ascending: false })
+      .limit(FILTER_SAMPLE),
+    supabase
+      .from('events')
+      .select('source')
+      .order('ts', { ascending: false })
+      .limit(FILTER_SAMPLE),
     fetchStrategyNameMap(supabase),
   ])
 

@@ -2,7 +2,6 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Badge } from '@/components/ui/badge'
 import { StrategiesList, type StrategyRow } from './_components/strategies-list'
-import { pickMetric } from '../backtests/_components/format'
 
 type Strategy = {
   id: string
@@ -16,10 +15,13 @@ type Strategy = {
   archived_at: string | null
 }
 
+// Only the summary column is needed for the best-PnL badges. Selecting the
+// full metrics jsonb per row scans a growing blob column for every backtest
+// on every page load — this shape is O(N) rows × cheap column instead.
 type BacktestLite = {
   strategy_id: string | null
   strategy_name: string | null
-  metrics: Record<string, unknown> | null
+  net_pnl: number | string | null
 }
 
 export default async function StrategiesPage({
@@ -42,7 +44,7 @@ export default async function StrategiesPage({
     stratQuery,
     supabase
       .from('backtests')
-      .select('strategy_id, strategy_name, metrics')
+      .select('strategy_id, strategy_name, net_pnl')
       .is('archived_at', null),
     supabase
       .from('strategies')
@@ -65,7 +67,11 @@ export default async function StrategiesPage({
   const countByName = new Map<string, number>()
 
   for (const bt of backtests) {
-    const pnl = pickMetric(bt.metrics, 'total_pnl')
+    // net_pnl is stored as `numeric` in Postgres, so supabase-js hands it
+    // back as a string. Number("") returns 0 which would poison the max —
+    // coerce with a NaN guard.
+    const raw = bt.net_pnl == null ? null : Number(bt.net_pnl)
+    const pnl = raw != null && Number.isFinite(raw) ? raw : null
     if (bt.strategy_id) {
       countById.set(bt.strategy_id, (countById.get(bt.strategy_id) ?? 0) + 1)
       if (pnl != null) {
