@@ -399,12 +399,80 @@ export function LiveView({
         />
       )}
 
+      {!inactive && <DailyStatsNote trades={trades} />}
+
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <TradesPanel trades={trades} newIds={newTradeIds} error={tradesError} />
           <EventsPanel events={events} newIds={newEventIds} error={eventsError} />
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Daily stats note ──────────────────────────────────────────────────────
+
+// Compact one-liner above the trades feed so P&L / commissions / slippage
+// for the current trading day are visible without scrolling into Overview.
+// Kept intentionally small — Overview is where you go for the deeper roll-up.
+function DailyStatsNote({ trades }: { trades: LiveTrade[] }) {
+  const stats = useMemo(() => {
+    let pnl = 0
+    let commissions = 0
+    let slippageSum = 0
+    let slippageCount = 0
+    let closedCount = 0
+    for (const t of trades) {
+      if (!t.exit_ts) continue
+      closedCount += 1
+      pnl += n(t.pnl)
+      commissions += n(t.commission)
+      if (t.slippage != null) {
+        slippageSum += n(t.slippage)
+        slippageCount += 1
+      }
+    }
+    return { pnl, commissions, slippageSum, slippageCount, closedCount }
+  }, [trades])
+
+  if (stats.closedCount === 0) return null
+
+  return (
+    <div className="rounded border border-border bg-card px-4 py-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-widest">
+        Today
+      </span>
+      <span>
+        <span className="text-muted-foreground/70 mr-1.5">P&amp;L</span>
+        <span className={cn('font-mono tabular-nums font-semibold', pnlClass(stats.pnl))}>
+          {fmtUsd(stats.pnl, { signed: true })}
+        </span>
+      </span>
+      <span>
+        <span className="text-muted-foreground/70 mr-1.5">Commissions</span>
+        <span className="font-mono tabular-nums text-[var(--negative)]">
+          {fmtUsd(stats.commissions)}
+        </span>
+      </span>
+      <span>
+        <span className="text-muted-foreground/70 mr-1.5">Slippage</span>
+        {stats.slippageCount === 0 ? (
+          <span className="font-mono tabular-nums text-muted-foreground">—</span>
+        ) : (
+          <span
+            className={cn(
+              'font-mono tabular-nums',
+              stats.slippageSum > 0 ? 'text-[var(--negative)]' : 'text-[var(--positive)]',
+            )}
+          >
+            {fmtUsd(stats.slippageSum, { signed: true })}
+          </span>
+        )}
+      </span>
+      <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+        {stats.closedCount} closed · net of commission
+      </span>
     </div>
   )
 }
@@ -907,6 +975,10 @@ type RealtimeChannelStates = {
 
 type RealtimeHealth = 'live' | 'connecting' | 'down'
 
+// Renders paper_status.connection_state — the runner's own report of its IB
+// session. "IB:" makes it obvious this is broker state, not runner-process
+// state (heartbeat pill covers process liveness). Lets Bryce disambiguate
+// "runner alive but IB dropped" vs "runner dead."
 function RunnerStateBadge({ state }: { state: LivePaperStatus['connection_state'] }) {
   const label = (state ?? 'unknown').toUpperCase()
   const cls =
@@ -920,9 +992,9 @@ function RunnerStateBadge({ state }: { state: LivePaperStatus['connection_state'
   return (
     <span
       className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-muted-foreground"
-      title="paper_status.connection_state (what the runner reports about its IB session)"
+      title="paper_status.connection_state — the runner's report of its IB session state"
     >
-      runner:&nbsp;<span className={cls}>{label}</span>
+      IB:&nbsp;<span className={cls}>{label}</span>
     </span>
   )
 }
@@ -979,8 +1051,32 @@ const SCHEDULE: ScheduleEntry[] = [
   { etMin: 18 * 60 + 0,  label: 'Globex resume' },
 ]
 
+type ScheduleState = 'trading' | 'force-flat' | 'break' | 'pre-market'
+
+// Answers "are we in the trading window right now?" so the panel doesn't
+// require mental arithmetic on the ET clock. Schedule is:
+//   03:00 → 16:55 ET  trading
+//   16:55 → 17:00 ET  force-flat
+//   17:00 → 18:00 ET  break (Globex closed)
+//   18:00 → 03:00 ET  pre-market (Globex open, strategy idle)
+function scheduleState(etMins: number): ScheduleState {
+  if (etMins >= 3 * 60 && etMins < 16 * 60 + 55) return 'trading'
+  if (etMins >= 16 * 60 + 55 && etMins < 17 * 60) return 'force-flat'
+  if (etMins >= 17 * 60 && etMins < 18 * 60) return 'break'
+  return 'pre-market'
+}
+
+const SCHEDULE_STATE_STYLES: Record<ScheduleState, { label: string; cls: string; dot: string }> = {
+  'trading':    { label: 'Trading',    cls: 'text-[var(--positive)]',   dot: 'bg-[var(--positive)]' },
+  'force-flat': { label: 'Force-flat', cls: 'text-[var(--warning)]',    dot: 'bg-[var(--warning)]' },
+  'break':      { label: 'Break',      cls: 'text-muted-foreground',    dot: 'bg-muted-foreground/60' },
+  'pre-market': { label: 'Pre-market', cls: 'text-muted-foreground',    dot: 'bg-muted-foreground/60' },
+}
+
 function ScheduleCountdown({ now }: { now: number }) {
   const etMins = etMinutesOfDay(now)
+  const state = scheduleState(etMins)
+  const stateStyle = SCHEDULE_STATE_STYLES[state]
   const next = SCHEDULE.find((s) => s.etMin > etMins) ?? SCHEDULE[0]
   const minutesUntil = next.etMin > etMins
     ? next.etMin - etMins
@@ -990,8 +1086,15 @@ function ScheduleCountdown({ now }: { now: number }) {
 
   return (
     <div className="rounded border border-border bg-card px-4 py-2 flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
-      <span className="text-muted-foreground">Next transition</span>
+      <span className="inline-flex items-center gap-2">
+        <span className="text-muted-foreground">Currently</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn('h-1.5 w-1.5 rounded-full', stateStyle.dot)} />
+          <span className={stateStyle.cls}>{stateStyle.label}</span>
+        </span>
+      </span>
       <span>
+        <span className="text-muted-foreground">Next: </span>
         <span className="text-foreground">{next.label}</span>
         <span className="text-muted-foreground/60"> · </span>
         <span className="text-foreground">in {humanDelta(secondsUntil * 1000)}</span>
