@@ -4,26 +4,38 @@ import {
   type LivePaperStatus,
   type LiveTrade,
   type LiveEvent,
-  type DrawdownPoint,
 } from './_components/live-view'
 import { HONEST_DATA_CUTOFF_ISO } from './_components/constants'
 
 const TRADE_LIMIT = 200
 const EVENT_LIMIT = 100
-const DRAWDOWN_LIMIT = 5000
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000
+
+// ET midnight for "today's paper trades." Falls back to the last 24h if
+// we're in the first minutes after midnight and want the previous session's
+// tail still visible — simplest to just anchor at ET midnight and let the
+// early-morning gap show as "no trades yet today."
+function etTodayStartIso(): string {
+  const now = new Date()
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(now)
+  const o: Record<string, string> = {}
+  for (const p of parts) o[p.type] = p.value
+  const nyAsUtc = Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour, +o.minute, +o.second)
+  const offMin = Math.round((nyAsUtc - now.getTime()) / 60000)
+  const naiveMidnightUtc = Date.UTC(+o.year, +o.month - 1, +o.day, 0, 0, 0)
+  return new Date(naiveMidnightUtc - offMin * 60000).toISOString()
+}
 
 export default async function LivePage() {
   const supabase = createClient()
 
-  // Rolling 24-hour window instead of UTC midnight — a UTC cutoff hides
-  // evening trades made in MT (America/Denver). For the dashboard's purposes
-  // "last 24h" is what we want either way.
-  const feedCutoffIso = new Date(Date.now() - TWENTY_FOUR_HOURS_MS).toISOString()
-  const drawdownCutoffIso = new Date(Date.now() - THIRTY_DAYS_MS).toISOString()
+  const feedCutoffIso = etTodayStartIso()
 
-  const [statusRes, tradesRes, eventsRes, openPosRes, ddRes] = await Promise.all([
+  const [statusRes, tradesRes, eventsRes, openPosRes] = await Promise.all([
     supabase
       .from('paper_status')
       .select(
@@ -33,9 +45,10 @@ export default async function LivePage() {
       )
       .eq('id', 1)
       .maybeSingle(),
-    // 24h feed — filter by exit_ts so closed trades roll off the panel a day
-    // after they close (not a day after they open). created_at cutoff drops
-    // the two dirty pre-fix rows (see live-view HONEST_DATA_CUTOFF_ISO).
+    // Today's paper trades — filter by exit_ts >= ET midnight. created_at
+    // cutoff drops the two dirty pre-fix rows silently (see
+    // live-view HONEST_DATA_CUTOFF_ISO); when trades.archived_at ships from
+    // backend this filter can go and Bryce archives them from Overview.
     supabase
       .from('trades')
       .select(
@@ -65,28 +78,13 @@ export default async function LivePage() {
       .order('ts', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    // 30-day trades series for drawdown. Only need exit_ts + pnl. Enforce
-    // honest-data cutoff and non-null exit_ts so the cumulative pnl is
-    // computed only on trades whose numbers we trust.
-    supabase
-      .from('trades')
-      .select('exit_ts, pnl')
-      .eq('source', 'paper')
-      .gte('exit_ts', drawdownCutoffIso)
-      .gt('created_at', HONEST_DATA_CUTOFF_ISO)
-      .not('exit_ts', 'is', null)
-      .order('exit_ts', { ascending: true })
-      .limit(DRAWDOWN_LIMIT),
   ])
 
-  // Per-query diagnostics: log row count and any error so we can tell apart
-  // "RLS returned 0 rows" from "SQL/HTTP error". The structured prefix makes
-  // these easy to grep in Vercel runtime logs.
   console.log('[Live] paper_status', {
     rows: statusRes.data ? 1 : 0,
     error: statusRes.error?.message ?? null,
   })
-  console.log('[Live] trades (source=paper, exit_ts last 24h, post-cutoff)', {
+  console.log('[Live] trades (source=paper, exit_ts >= ET today midnight)', {
     rows: tradesRes.data?.length ?? 0,
     error: tradesRes.error?.message ?? null,
     cutoff: feedCutoffIso,
@@ -99,17 +97,14 @@ export default async function LivePage() {
     found: openPosRes.data ? 1 : 0,
     error: openPosRes.error?.message ?? null,
   })
-  console.log('[Live] drawdown series (30d post-cutoff)', {
-    rows: ddRes.data?.length ?? 0,
-    error: ddRes.error?.message ?? null,
-    cutoff: drawdownCutoffIso,
-  })
 
   return (
     <div className="p-6 space-y-4 max-w-[1400px]">
       <div className="flex items-center justify-between">
         <h1 className="text-sm font-semibold tracking-tight">Live</h1>
-        <span className="text-[10px] text-muted-foreground font-mono">read-only · last 24h</span>
+        <span className="text-[10px] text-muted-foreground font-mono">
+          today · times in ET
+        </span>
       </div>
 
       <LiveView
@@ -117,7 +112,6 @@ export default async function LivePage() {
         initialTrades={(tradesRes.data ?? []) as unknown as LiveTrade[]}
         initialEvents={(eventsRes.data ?? []) as unknown as LiveEvent[]}
         initialOpenPosition={(openPosRes.data ?? null) as unknown as LiveEvent | null}
-        initialDrawdownSeries={(ddRes.data ?? []) as unknown as DrawdownPoint[]}
         statusError={statusRes.error?.message ?? null}
         tradesError={tradesRes.error?.message ?? null}
         eventsError={eventsRes.error?.message ?? null}

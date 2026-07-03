@@ -31,8 +31,6 @@ const STALE_MS = 390 * 1000
 const REALTIME_DOWN_GRACE_MS = 30 * 1000
 const POLLING_FALLBACK_MS = 10 * 1000
 
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
-
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export type LivePaperStatus = {
@@ -76,11 +74,6 @@ export type LiveEvent = {
   event_type: string
   source: string
   data: Record<string, unknown> | null
-}
-
-export type DrawdownPoint = {
-  exit_ts: string | null
-  pnl: number | string | null
 }
 
 // ── Numeric coercion ──────────────────────────────────────────────────────
@@ -150,7 +143,6 @@ export function LiveView({
   initialTrades,
   initialEvents,
   initialOpenPosition,
-  initialDrawdownSeries,
   statusError,
   tradesError,
   eventsError,
@@ -159,7 +151,6 @@ export function LiveView({
   initialTrades: LiveTrade[]
   initialEvents: LiveEvent[]
   initialOpenPosition: LiveEvent | null
-  initialDrawdownSeries: DrawdownPoint[]
   statusError: string | null
   tradesError: string | null
   eventsError: string | null
@@ -170,7 +161,6 @@ export function LiveView({
   const [trades, setTrades] = useState<LiveTrade[]>(initialTrades)
   const [events, setEvents] = useState<LiveEvent[]>(initialEvents)
   const [openPosition, setOpenPosition] = useState<LiveEvent | null>(initialOpenPosition)
-  const [drawdownSeries, setDrawdownSeries] = useState<DrawdownPoint[]>(initialDrawdownSeries)
   const [newTradeIds, setNewTradeIds] = useState<Set<string | number>>(new Set())
   const [newEventIds, setNewEventIds] = useState<Set<number>>(new Set())
   const [rtState, setRtState] = useState<RealtimeChannelStates>({
@@ -198,18 +188,6 @@ export function LiveView({
       next[idx] = t
       return next
     })
-    // Append to drawdown series when the trade is closed (has exit_ts +
-    // pnl). Idempotent — dedupe against existing exit_ts+pnl entries won't
-    // help here since ids aren't in the series; we key on exit_ts because
-    // a given trade closes exactly once.
-    if (t.exit_ts && t.pnl != null) {
-      setDrawdownSeries((prev) => {
-        if (prev.some((p) => p.exit_ts === t.exit_ts)) return prev
-        const merged = [...prev, { exit_ts: t.exit_ts, pnl: t.pnl }]
-        merged.sort((a, b) => (a.exit_ts ?? '').localeCompare(b.exit_ts ?? ''))
-        return merged
-      })
-    }
   }, [])
 
   const flashTradeId = useCallback((id: string | number) => {
@@ -350,7 +328,7 @@ export function LiveView({
         if (cancelled) return
         if (ps) setStatus(ps as unknown as LivePaperStatus)
 
-        const feedCutoffIso = new Date(Date.now() - TWENTY_FOUR_HOURS_MS).toISOString()
+        const feedCutoffIso = etTodayStartMs()
         const { data: tr } = await supabase
           .from('trades')
           .select(
@@ -389,90 +367,12 @@ export function LiveView({
   const inferredInstrument =
     status?.instrument ?? trades.find((t) => t.instrument)?.instrument ?? null
 
-  // ── Running P&L + commissions tally ─────────────────────────
-  const runningTally = useMemo(() => {
-    const cutoff24h = now - TWENTY_FOUR_HOURS_MS
-    const sessionStart = status?.started_at ? new Date(status.started_at).getTime() : null
-    let realized24h = 0
-    let realizedSession: number | null = sessionStart == null ? null : 0
-    let closedCount24h = 0
-    let closedCountSession = 0
-    let commissions24h = 0
-    let commissionsSession: number | null = sessionStart == null ? null : 0
-    for (const t of trades) {
-      if (!t.exit_ts) continue
-      const exitMs = new Date(t.exit_ts).getTime()
-      const pnl = n(t.pnl)
-      const comm = n(t.commission)
-      if (exitMs >= cutoff24h) {
-        realized24h += pnl
-        closedCount24h += 1
-        commissions24h += comm
-      }
-      if (sessionStart != null && exitMs >= sessionStart) {
-        realizedSession = (realizedSession ?? 0) + pnl
-        commissionsSession = (commissionsSession ?? 0) + comm
-        closedCountSession += 1
-      }
-    }
-    return {
-      realized24h,
-      realizedSession,
-      closedCount24h,
-      closedCountSession,
-      commissions24h,
-      commissionsSession,
-      unrealized: nOrNull(status?.unrealized_pnl),
-    }
-  }, [trades, status?.started_at, status?.unrealized_pnl, now])
-
-  // ── Drawdown ─────────────────────────────────────────────────
-  const drawdown = useMemo(() => computeDrawdown(drawdownSeries, now), [drawdownSeries, now])
-
-  // ── Slippage stats over last N trades ────────────────────────
-  const slippage = useMemo(() => {
-    const closedWithSlippage = trades
-      .filter((t) => t.exit_ts && t.slippage != null)
-      .slice(0, 20)
-    if (closedWithSlippage.length === 0) return null
-    let sum = 0
-    let adverse = 0
-    let worst = -Infinity
-    for (const t of closedWithSlippage) {
-      const s = n(t.slippage)
-      sum += s
-      if (s > 0) adverse += 1
-      if (s > worst) worst = s
-    }
-    return {
-      count: closedWithSlippage.length,
-      avg: sum / closedWithSlippage.length,
-      pctAdverse: adverse / closedWithSlippage.length,
-      worst,
-    }
-  }, [trades])
-
   const inactive = isSessionInactive(status, trades.length)
 
   return (
     <div className="space-y-5">
       {rtHardDown && (
         <RealtimeDownNudge downSeconds={Math.floor(rtDownDuration / 1000)} />
-      )}
-
-      {!inactive && (
-        <SummaryStrip
-          realized24h={runningTally.realized24h}
-          realizedSession={runningTally.realizedSession}
-          unrealized={runningTally.unrealized}
-          closedCount24h={runningTally.closedCount24h}
-          closedCountSession={runningTally.closedCountSession}
-          commissions24h={runningTally.commissions24h}
-          commissionsSession={runningTally.commissionsSession}
-          drawdown={drawdown}
-          hasPosition={hasPosition}
-          sessionStart={status?.started_at ?? null}
-        />
       )}
 
       <StatusPanel
@@ -503,8 +403,6 @@ export function LiveView({
           now={now}
         />
       )}
-
-      {!inactive && <SlippagePanel stats={slippage} />}
 
       {!inactive && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -692,260 +590,6 @@ function StatCard({
   )
 }
 
-// ── Compact top summary strip ─────────────────────────────────────────────
-
-// One-row glance: 24h P&L, session P&L, drawdown, commissions. Values render
-// at `text-lg` — big enough to read at a glance but not dominant like the
-// old panels. Info that used to live in RunningTallyPanel / DrawdownPanel is
-// folded into the sub-lines instead of taking three separate sections.
-function SummaryStrip({
-  realized24h,
-  realizedSession,
-  unrealized,
-  closedCount24h,
-  closedCountSession,
-  commissions24h,
-  commissionsSession,
-  drawdown,
-  hasPosition,
-  sessionStart,
-}: {
-  realized24h: number
-  realizedSession: number | null
-  unrealized: number | null
-  closedCount24h: number
-  closedCountSession: number
-  commissions24h: number
-  commissionsSession: number | null
-  drawdown: DrawdownStats
-  hasPosition: boolean
-  sessionStart: string | null
-}) {
-  const sessionStartDate = sessionStart ? new Date(sessionStart) : null
-  const noDdData = drawdown.pointsInWindow30d === 0
-  const avgCommission24h = closedCount24h > 0 ? commissions24h / closedCount24h : null
-
-  return (
-    <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {/* 24h P&L — value is realized; unrealized (if position open) hangs
-          below as an "open position" delta so the strip stays 4 cells. */}
-      <StripStat
-        label="24h P&L"
-        value={fmtUsd(realized24h, { signed: true })}
-        valueClass={pnlClass(realized24h)}
-        sub={
-          hasPosition && unrealized != null
-            ? <>
-                {closedCount24h} closed
-                <span className="text-muted-foreground/60"> · </span>
-                <span className={pnlClass(unrealized)}>
-                  {fmtUsd(unrealized, { signed: true })} open
-                </span>
-              </>
-            : closedCount24h === 1 ? '1 closed trade' : `${closedCount24h} closed trades`
-        }
-      />
-
-      <StripStat
-        label="Session P&L"
-        value={realizedSession == null ? '—' : fmtUsd(realizedSession, { signed: true })}
-        valueClass={realizedSession == null ? 'text-muted-foreground' : pnlClass(realizedSession)}
-        sub={
-          sessionStartDate
-            ? `since ${relativeTime(sessionStartDate)} · ${closedCountSession} closed`
-            : 'no session start'
-        }
-      />
-
-      <StripStat
-        label="Drawdown"
-        value={
-          noDdData
-            ? '—'
-            : drawdown.current === 0
-              ? 'at ATH'
-              : `−${fmtUsd(drawdown.current)}`
-        }
-        valueClass={
-          noDdData
-            ? 'text-muted-foreground'
-            : drawdown.current === 0
-              ? 'text-[var(--positive)]'
-              : 'text-[var(--negative)]'
-        }
-        sub={
-          noDdData
-            ? 'no closed trades yet'
-            : <>
-                max 24h {drawdown.max24h === 0 ? '$0' : `−${fmtUsd(drawdown.max24h)}`}
-                <span className="text-muted-foreground/60"> · </span>
-                30d {drawdown.max30d === 0 ? '$0' : `−${fmtUsd(drawdown.max30d)}`}
-              </>
-        }
-      />
-
-      <StripStat
-        label="Commissions 24h"
-        value={closedCount24h > 0 ? fmtUsd(commissions24h) : '—'}
-        valueClass={closedCount24h > 0 ? 'text-[var(--negative)]' : 'text-muted-foreground'}
-        sub={
-          avgCommission24h == null
-            ? 'no fills yet'
-            : <>
-                avg {fmtUsd(avgCommission24h)}/trade
-                {commissionsSession != null && (
-                  <>
-                    <span className="text-muted-foreground/60"> · </span>
-                    session {fmtUsd(commissionsSession)}
-                  </>
-                )}
-              </>
-        }
-      />
-    </section>
-  )
-}
-
-function StripStat({
-  label,
-  value,
-  valueClass,
-  sub,
-}: {
-  label: string
-  value: React.ReactNode
-  valueClass?: string
-  sub?: React.ReactNode
-}) {
-  return (
-    <div className="rounded border border-border bg-card px-3 py-2.5 space-y-1">
-      <div className="text-[10px] text-muted-foreground uppercase tracking-widest">{label}</div>
-      <div className={cn('font-mono font-semibold tabular-nums text-lg leading-none', valueClass)}>
-        {value}
-      </div>
-      {sub != null && (
-        <div className="text-[10px] text-muted-foreground font-mono">{sub}</div>
-      )}
-    </div>
-  )
-}
-
-// ── Drawdown ──────────────────────────────────────────────────────────────
-
-type DrawdownStats = {
-  current: number
-  max24h: number
-  max30d: number
-  pointsInWindow24h: number
-  pointsInWindow30d: number
-  latestCumPnl: number | null
-  peakCumPnl: number | null
-}
-
-// Cumulative pnl → peak tracking → drawdown series. Drawdowns are stored
-// unsigned (peak minus current), so current==0 means we're at all-time high.
-function computeDrawdown(series: DrawdownPoint[], nowMs: number): DrawdownStats {
-  if (series.length === 0) {
-    return { current: 0, max24h: 0, max30d: 0, pointsInWindow24h: 0, pointsInWindow30d: 0, latestCumPnl: null, peakCumPnl: null }
-  }
-  const cutoff24h = nowMs - TWENTY_FOUR_HOURS_MS
-  let cum = 0
-  let peak = 0
-  let maxDd30d = 0
-  let maxDd24h = 0
-  let peak24hWindow = 0
-  let pts24 = 0
-  let pts30 = 0
-  // Walk the series in chronological order.
-  const sorted = series.slice().sort((a, b) => (a.exit_ts ?? '').localeCompare(b.exit_ts ?? ''))
-  for (const p of sorted) {
-    const pnl = n(p.pnl)
-    cum += pnl
-    pts30 += 1
-    if (cum > peak) peak = cum
-    const dd = peak - cum
-    if (dd > maxDd30d) maxDd30d = dd
-
-    const exitMs = p.exit_ts ? new Date(p.exit_ts).getTime() : NaN
-    if (Number.isFinite(exitMs) && exitMs >= cutoff24h) {
-      pts24 += 1
-      if (cum > peak24hWindow) peak24hWindow = cum
-      const dd24 = peak24hWindow - cum
-      if (dd24 > maxDd24h) maxDd24h = dd24
-    } else {
-      // Anchor the 24h peak at the running peak just before entering the
-      // window so trades already underwater at window-open still measure
-      // meaningful intra-window drawdown.
-      if (cum > peak24hWindow) peak24hWindow = cum
-    }
-  }
-  return {
-    current: Math.max(0, peak - cum),
-    max24h: maxDd24h,
-    max30d: maxDd30d,
-    pointsInWindow24h: pts24,
-    pointsInWindow30d: pts30,
-    latestCumPnl: cum,
-    peakCumPnl: peak,
-  }
-}
-
-// ── Slippage panel (per-trade, last 20) ───────────────────────────────────
-
-type SlippageStats = {
-  count: number
-  avg: number
-  pctAdverse: number
-  worst: number
-}
-
-function SlippagePanel({ stats }: { stats: SlippageStats | null }) {
-  return (
-    <section className="rounded border border-border bg-card p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-          Slippage tracking
-        </h2>
-        <span className="text-[10px] text-muted-foreground font-mono">
-          positive = adverse
-        </span>
-      </div>
-      {stats == null ? (
-        <div className="text-xs text-muted-foreground">No paper trades with recorded slippage yet.</div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <StatCard
-            label="Avg / trade"
-            value={
-              <span className={cn('text-lg', stats.avg > 0 ? 'text-[var(--negative)]' : 'text-[var(--positive)]')}>
-                {fmtUsd(stats.avg, { signed: true })}
-              </span>
-            }
-            sub={`over last ${stats.count} closed trade${stats.count === 1 ? '' : 's'}`}
-          />
-          <StatCard
-            label="% adverse"
-            value={
-              <span className={cn('text-lg', stats.pctAdverse > 0.5 ? 'text-[var(--warning)]' : '')}>
-                {(stats.pctAdverse * 100).toFixed(0)}%
-              </span>
-            }
-            sub="fraction with slippage > 0"
-          />
-          <StatCard
-            label="Worst case"
-            value={
-              <span className={cn('text-lg', stats.worst > 0 ? 'text-[var(--negative)]' : '')}>
-                {fmtUsd(stats.worst, { signed: true })}
-              </span>
-            }
-            sub="single-trade max"
-          />
-        </div>
-      )}
-    </section>
-  )
-}
 
 // ── Trades panel ──────────────────────────────────────────────────────────
 
@@ -963,7 +607,7 @@ function TradesPanel({
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
         <div className="flex items-baseline gap-3">
           <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-            Paper trades · last 24h
+            Today&apos;s paper trades
           </h2>
           <span className="text-[10px] text-muted-foreground/70 font-mono">
             times in ET
@@ -980,9 +624,9 @@ function TradesPanel({
         </div>
       ) : trades.length === 0 ? (
         <div className="px-4 py-6 text-center text-xs text-muted-foreground space-y-1">
-          <div>No paper trades in the last 24 hours.</div>
+          <div>No paper trades yet today.</div>
           <div className="text-[10px] text-muted-foreground/70">
-            Filter: <span className="font-mono">trades.source = &apos;paper&apos; · exit_ts ≥ now−24h</span>
+            Filter: <span className="font-mono">trades.source = &apos;paper&apos; · exit_ts ≥ ET midnight</span>
           </div>
         </div>
       ) : (
@@ -1288,10 +932,14 @@ function RunnerStateBadge({ state }: { state: LivePaperStatus['connection_state'
   )
 }
 
-// Replaces the previous small unlabeled pip — now labels the health and
-// carries a visible reconnecting state so a dropped websocket surfaces in
-// the header instead of hiding.
+// Only renders when the Realtime feed is in a problem state
+// (connecting / down). When channels are healthy, the pill and runner
+// badge already carry the "everything's up" signal — an extra green
+// "RT live" chip read as a false-positive when the runner was actually
+// off, so it's suppressed. If the websocket drops, this appears in
+// yellow/red so the drop still surfaces.
 function RealtimeHealthBadge({ health }: { health: RealtimeHealth }) {
+  if (health === 'live') return null
   const { label, dot, cls } = REALTIME_STYLES[health]
   return (
     <span
@@ -1397,4 +1045,18 @@ function etMinutesOfDay(nowMs: number): number {
   const off = nyOffsetMinutes(now)
   const ny = new Date(now.getTime() + off * 60000)
   return ny.getUTCHours() * 60 + ny.getUTCMinutes()
+}
+
+// ISO string for the most recent ET midnight. Used by the polling fallback
+// so its cutoff matches the server-side page cutoff.
+function etTodayStartMs(): string {
+  const now = new Date()
+  const off = nyOffsetMinutes(now)
+  const ny = new Date(now.getTime() + off * 60000)
+  const y = ny.getUTCFullYear()
+  const m = ny.getUTCMonth()
+  const d = ny.getUTCDate()
+  const naiveMidnightUtc = Date.UTC(y, m, d, 0, 0, 0)
+  const offAtMidnight = nyOffsetMinutes(new Date(naiveMidnightUtc))
+  return new Date(naiveMidnightUtc - offAtMidnight * 60000).toISOString()
 }
